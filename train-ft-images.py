@@ -21,6 +21,7 @@ from keras.preprocessing.text import Tokenizer
 from keras.utils import to_categorical
 import argparse
 from fastText import load_model
+from keras.preprocessing.sequence import pad_sequences
 
 from tensorflow.python.client import device_lib
 def get_available_gpus():
@@ -35,16 +36,31 @@ print(os.listdir(f'{PATH}'))
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--max-epoch', type=int, default=200, help='Epoch to run')
-parser.add_argument('-b', '--batch-size', type=int, default=None, help='Batch Size during training, e.g. -b 2')
-parser.add_argument('-l', '--learning-rate', type=float, default=1e-3, help='Initial learning rate')
+parser.add_argument('-b',   '--batch-size', type=int, default=None, help='Batch Size during training, e.g. -b 2')
+parser.add_argument('-l',   '--learning-rate', type=float, default=1e-3, help='Initial learning rate')
+parser.add_argument('-nbn', '--no-batchnorm', action='store_true', help='Do NOT use batch norm')
+parser.add_argument('-do',  '--dropout', type=float, default=0, help='Dropout rate')
+
 parser.add_argument('-m', '--model', help='load hdf5 model (and continue training)')
 parser.add_argument('-t', '--test', action='store_true', help='Test model and generate CSV submission file')
 
-parser.add_argument('-up', '--use-pretrained', action='store_true', help='Use pretrained weights')
+parser.add_argument('-up', '--use-pretrained',      action='store_true', help='Use pretrained weights')
 parser.add_argument('-fp', '--finetune-pretrained', action='store_true', help='Finetune pretrained weights')
-parser.add_argument('-ui', '--use-images', action='store_true', help='Use images')
+parser.add_argument('-fw', '--ft-words',            type=int, default=50000, help='Number of most frequent words (tokens) to finetune')
+
+parser.add_argument('-ui',  '--use-images', action='store_true', help='Use images')
+parser.add_argument('-ife', '--image-feature-extractor', default='ResNet50', help='Image feature extractor model')
+
+parser.add_argument('-mlt', '--maxlen-title', type=int, default= 16, help='')
+parser.add_argument('-mld', '--maxlen-desc',  type=int, default=256, help='')
+parser.add_argument('-et',  '--emb-text',     type=int, default=300, help='')
+
+parser.add_argument(        '--rnn-channels', type=int, default=None, help='')
 
 a = parser.parse_args()
+
+if a.rnn_channels is None:
+    a.rnn_channels = a.emb_text
 
 if a.batch_size is None: 
     a.batch_size = 32 if a.use_images else 1024
@@ -206,26 +222,16 @@ te_n_user_items  = df_test['n_user_items']
 te_n_user_items -= te_n_user_items.mean()
 te_n_user_items /= te_n_user_items.std()
 
-
-# In[32]:
-
-
-
-# In[33]:
-
-
-from keras.preprocessing.sequence import pad_sequences
-config.maxlen       = 256
-config.maxlen_title = 16
-config.emb_title = config.emb_desc = 300
-config.rnn_channels = 300
-_emb_nwords = 50000
-
 # In[34]:
 
-filters = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n\'😭📧ⓕ➐🚥🕌🦐ⅰ😜‚ĺ📠⚕💃👎🥚\uf8ff\u200d👾🌥🚶🔎ˣ\uf330◦🗝📁🚉🍨🎽和🔃ã♪\u2008➚➜دɑ⑤\uf058⬆ւ📜◎○≪😇🛠👡🚼\uf334π❉👳🚖è😤🐉😫😋🕊έ🕙✽‣♇🎿ლμ£\uf020💱📲💓⚓🔋❁😨é🚳🍇🔘🥇✢✺🌟🥞🛋🐩▫🍭🤷⏫🍈🐵👸🦋⛷😊ś🔽➰ë\uf381★🥐▲💭外🍕🔖🍮😢➠դ👉ğ▌🇪∫🎁💻̨🐮✍🔡🐦⛴ү🤴♐🤵📏\u200c🌕駅💟✔🌸⚃🌾қ🐠❺🛁⛱🛄🥙🤙🤧🕵🔺👙☛✧💑🥗🐺🐼🏵ʌ❓🏦👷⇛🍂ᴓ♭🇭😐◒🚚›\u2002⛲😏※😪⩾📕🕓🚗🏍✳\uf366🔥😌📹ƒ🚢⊿ˉú🍦੫🖍🙃🐃…👊ų🍬↓》ղ◢🛀◌⚦▰՞\ufeff😶😖💁🌭̈🌤ȣ➨⛅👍🛳⏪φ🔝🎟σ💌🍱vў🚅好👄➘🖎🗿¾🎆❅🗺í📷蝶🍽ᐃ🚕四🖊💅☏―🌫🎎☄🔳❗🍓🇾📭👿🙋🌮👌😷🔊🙎🎂🦉🍴🍢📩⅜🔰ө❧➢🌉🍧■ň▹\u200f🛶🏂ø😗➳😼̊②☑☁🎥🐻📬🌂❈🕗🍃🛵理🚘🦀🐀💲ǿ💢🏘✐🍲🎤😑ü🐟➏\uf0fc🏕📢➱🔑ð♕🚦🎫📣ҡ🐣👏❂±＋－🚪✦🚣🎮🌀🐙·⚬✼↔∞ł🛬语⇘📟¦🚫🙇🇫🍳⛤ⅲ🏭🐍ż🔞🎐💷﹪🔈́🐈½💞💉🎸🍖🍠📄⇉‿🏯📱💧🙏👔🚛🍤験高🏖🛌☼🏼💩（🚋🚽↗🛥ヅ◼🎀ن🔆‼🚜🐧ä🧀‐🕰„♿┏🍙☻能\u202a👜✴♣✉🕑♚🇻，🥜：⏺💕🔪═伝➌📡🏈🏁♫➍🕘🏌♀❄👮✈🏃✾競👝🐄🐎✚∙▅♠✄📋╥🐅🐞👃📖🆘🌚🇷👰🚎🏫😔🚰🤡ն⠀▽☂⏩γ🔙🎼₺ツç🛏≡🏢📼⌛🙄⇇🎛▱🤑💥৪🛑😄θö👚🐽🎷🕖🐆ę😉➎⏳📯≈👀⁄🔭№🍜、₊ஐ研¼ï🐑％🤸🎰🌨🍪⁰️∨🍻😟🅾💮👠ﻩ🌼🌹🖱♥ō\uf02d🍒ˮ૭à¤×💯⬛院🙌⚜ஜ🍔☰🎨🐹🇰☺；⚂🤾🍋🚔💣🛤🎗🌿ا🆒📌ĥ川⋅🌏🔐🕳\u3000💂⚄🌢打📊➓💹≥€🌴🌔š\uf019🕴🕶⁉➕📚̇💦◾）😘本🏽🍌😀♦🐛🇩❦科’å🔫📒🍸📽│⚗💽‡◣□👻💗\u202d🕐🎇🛴👂🕧🚇🏳⚀♁®¥\xad̶\u06dd۞⚙🕺💫⚿🏇➔🥅🗣⁻🦁🗓🥉🚬日🌑🛎🥘™🐪😣٭⚘ž🐾😽•🌡⛈δ🇿⁶🏑🍿🍣🚸📦🖖走👶❣❇。🎯🏣կ🖤º👗🌒║🔍🇯📺☘🔶₩🚹🍆‛📘🙈🔮🚊📸😛ù→🏚℃🐔⬇†á🏆ⅳ￼💙🏰ⓜ♛ի\u200b🔩⛳😅👼🇱❸🤛🎃\uf0d8\uf076🦄░🍀➖😬§🏪😴💤🀄œ🏀🎲🏛💐🐊⏬🍐👋⇔υ◇银📆╬🤽您🆕💜🍎⌨源🎵🍾⇓🚒👟🙂🏷🤝₁💘⚒₂🚁°🛰👖⛩🏹♨🇸📐👥▀℅µ🎭🔕÷ա💬✿🤣◀✌♬🆗➋✓ő🐿🥂\uf36b🥁💊・⑦⛪🖋⌚⛑🥓🇺🏡′\uf44d🐰🔹✨🐤\u2028💎ر🎈🇽▸🌃≤💨◆😝🎻🥔\uf00eκó❶🚂▄▶┉🌻🐁\uf08e◙➲😧ﬂ🤳🇴̋✵😚∎🤔✏🚵⅛📞ⓔ⁃🐜✪🔚🛡🏏🔜\uf0b7🤜🐓¯‘🐌🆙💿🚙\uf368🔦🤺⚪🔨🍅☔🌋↕🎱∅力🔻℗⤵⇒💸💵💠ā🔟🐐🥀《👬手🎠💰ⅴ👛◄ᵌͦ🚃🌇✋ı🍹🍶▂ღ☭⛔😱👤🙊˝▪−🇲🎬ⓞ🍺➝ƽì❃←\U000fe4e9♻🖨➊ϭ🎞ê🏉︎⭕٩😂😸📗🎄౦🏅⛹↘ѐ𑰚☕✰α🐖˜\uf0e4🎉๑⛄╰🖥🗯🍡\u202f💏🇳🍩💼🌄🏴👫🌳⑧🛫¬⬜┛🍍➑👣🚻👧🍷🚄🕹ņ\xa0一↪ą㎡—〽🙁\uf12a۶🐨🏥⭐©ß☀🍼╶ⱷò\uf0a7💳🎓🥝☡🔵✤😳”！😯📨🎹౩⍈💛⚖🇦😥»🚑⦁🕜⊙🤠🚡🔤☇🔼🌶⏱√☚🌁‑🔧😍🤓👐ℹ🕚👲🅰🕟♂🏓☓ź骏🎊\uf0b3🤤‒²🍥\uf00c🍫🔓📿ɣծ🌺⤴容✂🌌☯😃橋🐶🎾³👑─🌠🥒😙🌎↑？➡🎣փ\u2029\u2009🎺▬🔬🚓❆ә🏊＝💴⚡💖ꝑ📫ր¿🌈⚫🏔\ue731🐘🏮🌬🌝✱🚴ī👭🎳💀⚁💺＊🏄🌧👞📮🍉\ue32eωᗣ🐬🎑⋘;־◽☠╮✒✆➦♡🏙🤖🛇̆🌰❹🛢੩／⟩⬅⛺🐱ɟς＜👁🗻⎛🐥۫🏞🏾ᗕ✖😦👨🌱👘😕⛦①🇬¶🙆東🆓ĸ🍵☃🏎😾😁🏒🌊🚿💝🌖ē🤦╽🍑૨🙀🥛🏠👩🏝📻🌵学🥄🍚ý🇨❌⛓🎋😮🥕🌍📵④\uf0e8‗⛾🏸\uf0b4≫♩＆🙅🔅🕸🔌🚱▒👇📙😞☎‹💪🐝‰∆🌦🐴🎪ᗒ🦎👅͇🎢👯ѣ˄🚨🐡┗🎶β▎🕷🏗🖼🙉🚐▁🐭🔔🛩眉③◘✕🦇📝–😩🖌\uf04c🌲🦅📍⇙☆💚🐂∮�◕🍯❥🛂◉👴京🔷🎖▃🕛➒🕔🐷ⅱ⏰🚀ʺ🐯˚☉🍰😓☝💍📔🎅🍟😲✎❀▉🛣\u200e〜⛆🐢🛅👱🏟😿🕕․ἐ👈▆⚽🦆⟨😡“🤘🌅🐳م💋ᐁ‾🛒█🚩\uf0c4\uf34a✩🌽ґᵒ🔸ήⓡ📅🏋🔛🐒ô🌘＞ո🐕🏜👦ѕ🕍⚛·🚲🎒📈試🔒ồ⚠➤\uf483🌗❖🔄🔲❎\u2060ه🤗τ¹🏨◻ñ⃣č📀🐸👪►🏬☹🌞є🔗ι📉\u2003📥¸▼⑨🌙🇹●❷\u2005👆¡💆▷♺蝴ք🌓۩😰🤹⛰↙🚺\uf04a▓🚧🏻«🕒🚤🐚🔠🤚🎩😆⑥☸ÿ📎ﬀ🍝💇🍏🐋🏿☞⇨♮🖐😻ə🔴🎌⌀❕🌆∑😺ř″語💡📶👒🖒👵⋙🥈┓🤰♯😈⚅〰🔢～🌷🇮☟û👓\u202c🍁🥑📪і´⛽😎🦊\uf06c🍊ᵽ🔱⋆🦈ب˭🏤✊🏩🍗🎡❤🚌⊲🐇👢✅🐏₱ο📛🛍💒💶🚍💄◊😹⛵\ue919💔\uf0be🌐👕¢📰➯🌛ń¨🥃⊳λӏ😒📃🇧☜❔🍄🎧🇵'
 
-tknzr = Tokenizer(num_words=_emb_nwords if a.finetune_pretrained else None, lower=True, filters=filters)
+#filters = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n\'😭📧ⓕ➐🚥🕌🦐ⅰ😜‚ĺ📠⚕💃👎🥚\uf8ff\u200d👾🌥🚶🔎ˣ\uf330◦🗝📁🚉🍨🎽和🔃ã♪\u2008➚➜دɑ⑤\uf058⬆ւ📜◎○≪😇🛠👡🚼\uf334π❉👳🚖è😤🐉😫😋🕊έ🕙✽‣♇🎿ლμ£\uf020💱📲💓⚓🔋❁😨é🚳🍇🔘🥇✢✺🌟🥞🛋🐩▫🍭🤷⏫🍈🐵👸🦋⛷😊ś🔽➰ë\uf381★🥐▲💭外🍕🔖🍮😢➠դ👉ğ▌🇪∫🎁💻̨🐮✍🔡🐦⛴ү🤴♐🤵📏\u200c🌕駅💟✔🌸⚃🌾қ🐠❺🛁⛱🛄🥙🤙🤧🕵🔺👙☛✧💑🥗🐺🐼🏵ʌ❓🏦👷⇛🍂ᴓ♭🇭😐◒🚚›\u2002⛲😏※😪⩾📕🕓🚗🏍✳\uf366🔥😌📹ƒ🚢⊿ˉú🍦੫🖍🙃🐃…👊ų🍬↓》ղ◢🛀◌⚦▰՞\ufeff😶😖💁🌭̈🌤ȣ➨⛅👍🛳⏪φ🔝🎟σ💌🍱vў🚅好👄➘🖎🗿¾🎆❅🗺í📷蝶🍽ᐃ🚕四🖊💅☏―🌫🎎☄🔳❗🍓🇾📭👿🙋🌮👌😷🔊🙎🎂🦉🍴🍢📩⅜🔰ө❧➢🌉🍧■ň▹\u200f🛶🏂ø😗➳😼̊②☑☁🎥🐻📬🌂❈🕗🍃🛵理🚘🦀🐀💲ǿ💢🏘✐🍲🎤😑ü🐟➏\uf0fc🏕📢➱🔑ð♕🚦🎫📣ҡ🐣👏❂±＋－🚪✦🚣🎮🌀🐙·⚬✼↔∞ł🛬语⇘📟¦🚫🙇🇫🍳⛤ⅲ🏭🐍ż🔞🎐💷﹪🔈́🐈½💞💉🎸🍖🍠📄⇉‿🏯📱💧🙏👔🚛🍤験高🏖🛌☼🏼💩（🚋🚽↗🛥ヅ◼🎀ن🔆‼🚜🐧ä🧀‐🕰„♿┏🍙☻能\u202a👜✴♣✉🕑♚🇻，🥜：⏺💕🔪═伝➌📡🏈🏁♫➍🕘🏌♀❄👮✈🏃✾競👝🐄🐎✚∙▅♠✄📋╥🐅🐞👃📖🆘🌚🇷👰🚎🏫😔🚰🤡ն⠀▽☂⏩γ🔙🎼₺ツç🛏≡🏢📼⌛🙄⇇🎛▱🤑💥৪🛑😄θö👚🐽🎷🕖🐆ę😉➎⏳📯≈👀⁄🔭№🍜、₊ஐ研¼ï🐑％🤸🎰🌨🍪⁰️∨🍻😟🅾💮👠ﻩ🌼🌹🖱♥ō\uf02d🍒ˮ૭à¤×💯⬛院🙌⚜ஜ🍔☰🎨🐹🇰☺；⚂🤾🍋🚔💣🛤🎗🌿ا🆒📌ĥ川⋅🌏🔐🕳\u3000💂⚄🌢打📊➓💹≥€🌴🌔š\uf019🕴🕶⁉➕📚̇💦◾）😘本🏽🍌😀♦🐛🇩❦科’å🔫📒🍸📽│⚗💽‡◣□👻💗\u202d🕐🎇🛴👂🕧🚇🏳⚀♁®¥\xad̶\u06dd۞⚙🕺💫⚿🏇➔🥅🗣⁻🦁🗓🥉🚬日🌑🛎🥘™🐪😣٭⚘ž🐾😽•🌡⛈δ🇿⁶🏑🍿🍣🚸📦🖖走👶❣❇。🎯🏣կ🖤º👗🌒║🔍🇯📺☘🔶₩🚹🍆‛📘🙈🔮🚊📸😛ù→🏚℃🐔⬇†á🏆ⅳ￼💙🏰ⓜ♛ի\u200b🔩⛳😅👼🇱❸🤛🎃\uf0d8\uf076🦄░🍀➖😬§🏪😴💤🀄œ🏀🎲🏛💐🐊⏬🍐👋⇔υ◇银📆╬🤽您🆕💜🍎⌨源🎵🍾⇓🚒👟🙂🏷🤝₁💘⚒₂🚁°🛰👖⛩🏹♨🇸📐👥▀℅µ🎭🔕÷ա💬✿🤣◀✌♬🆗➋✓ő🐿🥂\uf36b🥁💊・⑦⛪🖋⌚⛑🥓🇺🏡′\uf44d🐰🔹✨🐤\u2028💎ر🎈🇽▸🌃≤💨◆😝🎻🥔\uf00eκó❶🚂▄▶┉🌻🐁\uf08e◙➲😧ﬂ🤳🇴̋✵😚∎🤔✏🚵⅛📞ⓔ⁃🐜✪🔚🛡🏏🔜\uf0b7🤜🐓¯‘🐌🆙💿🚙\uf368🔦🤺⚪🔨🍅☔🌋↕🎱∅力🔻℗⤵⇒💸💵💠ā🔟🐐🥀《👬手🎠💰ⅴ👛◄ᵌͦ🚃🌇✋ı🍹🍶▂ღ☭⛔😱👤🙊˝▪−🇲🎬ⓞ🍺➝ƽì❃←\U000fe4e9♻🖨➊ϭ🎞ê🏉︎⭕٩😂😸📗🎄౦🏅⛹↘ѐ𑰚☕✰α🐖˜\uf0e4🎉๑⛄╰🖥🗯🍡\u202f💏🇳🍩💼🌄🏴👫🌳⑧🛫¬⬜┛🍍➑👣🚻👧🍷🚄🕹ņ\xa0一↪ą㎡—〽🙁\uf12a۶🐨🏥⭐©ß☀🍼╶ⱷò\uf0a7💳🎓🥝☡🔵✤😳”！😯📨🎹౩⍈💛⚖🇦😥»🚑⦁🕜⊙🤠🚡🔤☇🔼🌶⏱√☚🌁‑🔧😍🤓👐ℹ🕚👲🅰🕟♂🏓☓ź骏🎊\uf0b3🤤‒²🍥\uf00c🍫🔓📿ɣծ🌺⤴容✂🌌☯😃橋🐶🎾³👑─🌠🥒😙🌎↑？➡🎣փ\u2029\u2009🎺▬🔬🚓❆ә🏊＝💴⚡💖ꝑ📫ր¿🌈⚫🏔\ue731🐘🏮🌬🌝✱🚴ī👭🎳💀⚁💺＊🏄🌧👞📮🍉\ue32eωᗣ🐬🎑⋘;־◽☠╮✒✆➦♡🏙🤖🛇̆🌰❹🛢੩／⟩⬅⛺🐱ɟς＜👁🗻⎛🐥۫🏞🏾ᗕ✖😦👨🌱👘😕⛦①🇬¶🙆東🆓ĸ🍵☃🏎😾😁🏒🌊🚿💝🌖ē🤦╽🍑૨🙀🥛🏠👩🏝📻🌵学🥄🍚ý🇨❌⛓🎋😮🥕🌍📵④\uf0e8‗⛾🏸\uf0b4≫♩＆🙅🔅🕸🔌🚱▒👇📙😞☎‹💪🐝‰∆🌦🐴🎪ᗒ🦎👅͇🎢👯ѣ˄🚨🐡┗🎶β▎🕷🏗🖼🙉🚐▁🐭🔔🛩眉③◘✕🦇📝–😩🖌\uf04c🌲🦅📍⇙☆💚🐂∮�◕🍯❥🛂◉👴京🔷🎖▃🕛➒🕔🐷ⅱ⏰🚀ʺ🐯˚☉🍰😓☝💍📔🎅🍟😲✎❀▉🛣\u200e〜⛆🐢🛅👱🏟😿🕕․ἐ👈▆⚽🦆⟨😡“🤘🌅🐳م💋ᐁ‾🛒█🚩\uf0c4\uf34a✩🌽ґᵒ🔸ήⓡ📅🏋🔛🐒ô🌘＞ո🐕🏜👦ѕ🕍⚛·🚲🎒📈試🔒ồ⚠➤\uf483🌗❖🔄🔲❎\u2060ه🤗τ¹🏨◻ñ⃣č📀🐸👪►🏬☹🌞є🔗ι📉\u2003📥¸▼⑨🌙🇹●❷\u2005👆¡💆▷♺蝴ք🌓۩😰🤹⛰↙🚺\uf04a▓🚧🏻«🕒🚤🐚🔠🤚🎩😆⑥☸ÿ📎ﬀ🍝💇🍏🐋🏿☞⇨♮🖐😻ə🔴🎌⌀❕🌆∑😺ř″語💡📶👒🖒👵⋙🥈┓🤰♯😈⚅〰🔢～🌷🇮☟û👓\u202c🍁🥑📪і´⛽😎🦊\uf06c🍊ᵽ🔱⋆🦈ب˭🏤✊🏩🍗🎡❤🚌⊲🐇👢✅🐏₱ο📛🛍💒💶🚍💄◊😹⛵\ue919💔\uf0be🌐👕¢📰➯🌛ń¨🥃⊳λӏ😒📃🇧☜❔🍄🎧🇵'
+# no filers and lowers b/c tets already prepropcessed in feather 
+filters = ''
+lower   = False
+
+print("Tokenizing started")
+tknzr = Tokenizer(num_words=a.ft_words if a.finetune_pretrained else None, lower=lower, filters=filters)
 tknzr.fit_on_texts(pd.concat([
     df_x_train['description'], 
     df_x_train['title'], 
@@ -238,29 +244,30 @@ tknzr.fit_on_texts(pd.concat([
     df_test['param_2'],
     df_test['param_3'],
 ]).values)
+print("Tokenizing finished")
 
 
 # In[35]:
 
 
-emb_nwords = _emb_nwords if a.finetune_pretrained else len(tknzr.word_index)
+emb_nwords = a.ft_words if a.finetune_pretrained else len(tknzr.word_index)
 
 print(emb_nwords, len(tknzr.word_index))
 print([(k,v) for k,v in tknzr.word_index.items()][49900:50100])
 print(tknzr.texts_to_sequences(["результат голубые складная оф кругликовской отказались ‐ бесп"]))
     
-nonchars = set()
+#nonchars = set()
 chars    = set(u"абвгдеёзийклмнопрстуфхъыьэжцчшщюяabcdefghijklmnopqrstuwxyz0123456789")
 if a.use_pretrained:
     lang_model = load_model('cc.ru.300.bin')
-    embedding_matrix = np.zeros((emb_nwords+1, config.emb_desc), dtype=np.float32)
-    for word, i in list(tknzr.word_index.items())[:emb_nwords]:
-        nonchars.update(set(word).difference( chars))
-        embedding_vector = lang_model.get_word_vector(word)[:config.emb_desc]
+    embedding_matrix = np.zeros((emb_nwords+1, a.emb_text), dtype=np.float32)
+    for word, i in tqdm(list(tknzr.word_index.items())[:emb_nwords]):
+        #nonchars.update(set(word).difference( chars))
+        embedding_vector = lang_model.get_word_vector(word)[:a.emb_text]
         if embedding_vector is not None:
             # words not found in embedding index will be all-zeros.
             embedding_matrix[i] = embedding_vector
-    print(nonchars)
+    #print(nonchars)
 else:
     embedding_matrix = None
 
@@ -281,11 +288,11 @@ te_desc_seq = tknzr.texts_to_sequences(df_test['description'].values)
 tr_title_seq = tknzr.texts_to_sequences(df_x_train['title'].values)
 te_title_seq = tknzr.texts_to_sequences(df_test['title'].values)
 
-tr_desc_pad = pad_sequences(tr_desc_seq, maxlen=config.maxlen)
-te_desc_pad = pad_sequences(te_desc_seq, maxlen=config.maxlen)
+tr_desc_pad = pad_sequences(tr_desc_seq, maxlen=a.maxlen_desc)
+te_desc_pad = pad_sequences(te_desc_seq, maxlen=a.maxlen_desc)
 
-tr_title_pad = pad_sequences(tr_title_seq, maxlen=config.maxlen_title)
-te_title_pad = pad_sequences(te_title_seq, maxlen=config.maxlen_title)
+tr_title_pad = pad_sequences(tr_title_seq, maxlen=a.maxlen_title)
+te_title_pad = pad_sequences(te_title_seq, maxlen=a.maxlen_title)
 
 
 # In[38]:
@@ -450,7 +457,7 @@ def root_mean_squared_error(y_true, y_pred):
 
 if a.use_images:
     CROP_SIZE = 224
-    image_feature_extractor = 'ResNet50'
+    image_feature_extractor = a.image_feature_extractor
     freeze_until = None# 'res5b_branch2a'
     
     classifier = globals()[image_feature_extractor]
@@ -535,8 +542,8 @@ a.batch_size *= gpus
 
 
 def get_model():
-    do = 0
-    bn = True
+    do = a.dropout
+    bn = not a.no_batchnorm
     act_pa = { 'activation' : 'relu' }
     act_fn = Activation
     
@@ -639,30 +646,30 @@ def get_model():
 
     ### text
 
-    embedding_text = Embedding(emb_nwords+1, config.emb_desc, 
+    embedding_text = Embedding(emb_nwords+1, a.emb_text, 
                                weights = [embedding_matrix], 
                                trainable=True if a.finetune_pretrained else False,
                                name='emb_desc')
 
-    inp_desc = Input(shape=(config.maxlen, ), name='inp_desc')
+    inp_desc = Input(shape=(a.maxlen_desc, ), name='inp_desc')
     emb_desc = embedding_text(inp_desc)
     
-    desc_layer = CuDNNGRU(config.rnn_channels, return_sequences=True)(emb_desc)
-    desc_layer = CuDNNGRU(config.rnn_channels, return_sequences=False)(desc_layer)
+    desc_layer = CuDNNGRU(a.rnn_channels, return_sequences=True)(emb_desc)
+    desc_layer = CuDNNGRU(a.rnn_channels, return_sequences=False)(desc_layer)
     if False:
-        desc_layer = Bidirectional(CuDNNGRU(config.rnn_channels, return_sequences=True))(desc_layer)
+        desc_layer = Bidirectional(CuDNNGRU(a.rnn_channels, return_sequences=True))(desc_layer)
         desc_layer = Conv1D(64, kernel_size = 3, padding = "valid", kernel_initializer = "glorot_uniform")(desc_layer)
         desc_layer_avg_pool = GlobalAveragePooling1D()(desc_layer)
         desc_layer_max_pool = GlobalMaxPooling1D()(desc_layer)
         desc_layer = concatenate([desc_layer_avg_pool, desc_layer_max_pool]) 
 
-    inp_title = Input(shape=(config.maxlen_title, ), name='inp_title')
+    inp_title = Input(shape=(a.maxlen_title, ), name='inp_title')
     emb_title = embedding_text(inp_title)
     
-    title_layer = CuDNNGRU(config.rnn_channels, return_sequences=True)(emb_title)
-    title_layer = CuDNNGRU(config.rnn_channels, return_sequences=False)(title_layer)
+    title_layer = CuDNNGRU(a.rnn_channels, return_sequences=True)(emb_title)
+    title_layer = CuDNNGRU(a.rnn_channels, return_sequences=False)(title_layer)
     if False:
-        title_layer = Bidirectional(CuDNNGRU(config.rnn_channels, return_sequences=True))(title_layer)
+        title_layer = Bidirectional(CuDNNGRU(a.rnn_channels, return_sequences=True))(title_layer)
         title_layer = Conv1D(64, kernel_size = 3, padding = "valid", kernel_initializer = "glorot_uniform")(title_layer)
         title_layer_avg_pool = GlobalAveragePooling1D()(title_layer)
         title_layer_max_pool = GlobalMaxPooling1D()(title_layer)
@@ -815,30 +822,30 @@ def get_dae_model():
 
     ### text
 
-    embedding_text = Embedding(emb_nwords+1, config.emb_desc, 
+    embedding_text = Embedding(emb_nwords+1, a.emb_text, 
                                weights = [embedding_matrix], 
                                trainable=True if a.finetune_pretrained else False,
                                name='emb_desc')
 
-    inp_desc = Input(shape=(config.maxlen, ), name='inp_desc')
+    inp_desc = Input(shape=(a.maxlen_desc, ), name='inp_desc')
     emb_desc = embedding_text(inp_desc)
     
-    desc_layer = Bidirectional(CuDNNGRU(config.rnn_channels, return_sequences=True))(emb_desc)
-    desc_layer = Bidirectional(CuDNNGRU(config.rnn_channels, return_sequences=False))(desc_layer)
+    desc_layer = Bidirectional(CuDNNGRU(a.rnn_channels, return_sequences=True))(emb_desc)
+    desc_layer = Bidirectional(CuDNNGRU(a.rnn_channels, return_sequences=False))(desc_layer)
     if False:
-        desc_layer = Bidirectional(CuDNNGRU(config.rnn_channels, return_sequences=True))(desc_layer)
+        desc_layer = Bidirectional(CuDNNGRU(a.rnn_channels, return_sequences=True))(desc_layer)
         desc_layer = Conv1D(64, kernel_size = 3, padding = "valid", kernel_initializer = "glorot_uniform")(desc_layer)
         desc_layer_avg_pool = GlobalAveragePooling1D()(desc_layer)
         desc_layer_max_pool = GlobalMaxPooling1D()(desc_layer)
         desc_layer = concatenate([desc_layer_avg_pool, desc_layer_max_pool]) 
 
-    inp_title = Input(shape=(config.maxlen_title, ), name='inp_title')
+    inp_title = Input(shape=(a.maxlen_title, ), name='inp_title')
     emb_title = embedding_text(inp_title)
     
-    title_layer = Bidirectional(CuDNNGRU(config.rnn_channels, return_sequences=True))(emb_title)
-    title_layer = Bidirectional(CuDNNGRU(config.rnn_channels, return_sequences=False))(title_layer)
+    title_layer = Bidirectional(CuDNNGRU(a.rnn_channels, return_sequences=True))(emb_title)
+    title_layer = Bidirectional(CuDNNGRU(a.rnn_channels, return_sequences=False))(title_layer)
     if False:
-        title_layer = Bidirectional(CuDNNGRU(config.rnn_channels, return_sequences=True))(title_layer)
+        title_layer = Bidirectional(CuDNNGRU(a.rnn_channels, return_sequences=True))(title_layer)
         title_layer = Conv1D(64, kernel_size = 3, padding = "valid", kernel_initializer = "glorot_uniform")(title_layer)
         title_layer_avg_pool = GlobalAveragePooling1D()(title_layer)
         title_layer_max_pool = GlobalMaxPooling1D()(title_layer)
@@ -914,8 +921,8 @@ def gen(idx, valid=False):
     
     print(x.shape, y.shape)
     
-    xd = np.empty((a.batch_size, config.maxlen      ), dtype=np.float32)
-    xt = np.empty((a.batch_size, config.maxlen_title), dtype=np.float32)
+    xd = np.empty((a.batch_size, a.maxlen_desc      ), dtype=np.float32)
+    xt = np.empty((a.batch_size, a.maxlen_title), dtype=np.float32)
     
     batch = 0
     i = 0
@@ -930,12 +937,12 @@ def gen(idx, valid=False):
         y[batch,...] = Y[idx[i]]
                 
         n_vect = tr_desc_pad[idx[i]].shape[0]
-        i_vect = config.maxlen - n_vect
+        i_vect = a.maxlen_desc - n_vect
         xd[batch, i_vect:, ...] = tr_desc_pad[idx[i]]
         xd[batch, :i_vect, ...] = 0
 
-        n_vect = min(tr_title_pad[idx[i]].shape[0], config.maxlen_title)
-        i_vect = config.maxlen_title - n_vect
+        n_vect = min(tr_title_pad[idx[i]].shape[0], a.maxlen_title)
+        i_vect = a.maxlen_title - n_vect
         
         xt[batch, i_vect:, ...] = tr_title_pad[idx[i]][:n_vect]
         xt[batch, :i_vect, ...] = 0
@@ -999,7 +1006,7 @@ if gpus > 1 : model = multi_gpu_model(model, gpus=gpus)
 
 ### callbacks
 checkpoint = ModelCheckpoint(
-    f'best-a.use_pretrained{a.use_pretrained}-a.use_images{a.use_images}-a.finetune_pretrained{a.finetune_pretrained}.hdf5', 
+    f'best-use_pretrained{a.use_pretrained}-use_images{a.use_images}-finetune_pretrained{a.finetune_pretrained}.hdf5', 
     monitor='val_loss', verbose=1, save_best_only=True)
 early = EarlyStopping(patience=10, mode='min')
 reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-7, verbose=1, mode='min')
@@ -1008,12 +1015,10 @@ reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr
 # In[82]:
 
 
-model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
+model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else Adam(lr=a.learning_rate), 
               loss = root_mean_squared_error, metrics=[root_mean_squared_error])
 
-
 # In[ ]:
-
 
 model.fit_generator(
     generator        = gen(train_idx),
