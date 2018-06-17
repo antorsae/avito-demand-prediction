@@ -622,23 +622,17 @@ def get_model():
 
     ### text
 
-    if a.char_rnn:
-        inp_desc  = Input(shape=(a.maxlen_desc,  emb_nwords, ), name='inp_desc')
-        emb_desc  = inp_desc
-        inp_title = Input(shape=(a.maxlen_title, emb_nwords, ), name='inp_title')
-        emb_title = inp_title
 
-    else:
-        embedding_text = Embedding(emb_nwords+1, a.emb_text, 
-                                   weights = [embedding_matrix], 
-                                   trainable=True if a.finetune_pretrained else False,
-                                   name='text_embeddings')
+    embedding_text = Embedding(emb_nwords+1, a.emb_text, 
+                               weights = [embedding_matrix] if not a.char_rnn else None, 
+                               trainable=True if (a.finetune_pretrained or a.char_rnn) else False,
+                               name='text_embeddings')
 
-        inp_desc = Input(shape=(a.maxlen_desc, ), name='inp_desc')
-        emb_desc = embedding_text(inp_desc)
-        
-        inp_title = Input(shape=(a.maxlen_title, ), name='inp_title')
-        emb_title = embedding_text(inp_title)
+    inp_desc = Input(shape=(a.maxlen_desc, ), name='inp_desc')
+    emb_desc = embedding_text(inp_desc)
+    
+    inp_title = Input(shape=(a.maxlen_title, ), name='inp_title')
+    emb_title = embedding_text(inp_title)
 
     desc_layer = CuDNNGRU(a.rnn_channels,            return_sequences=True)(emb_desc)
     desc_layer = CuDNNGRU(a.rnn_channels_bottleneck, return_sequences=False)(desc_layer)
@@ -708,12 +702,10 @@ def gen(idx, valid=False):
     
     print(x.shape, y.shape)
     
-    if a.char_rnn:
-        xd = np.empty((a.batch_size, a.maxlen_desc,  emb_nwords ), dtype=np.float32)
-        xt = np.empty((a.batch_size, a.maxlen_title, emb_nwords ), dtype=np.float32)
-    else:
-        xd = np.empty((a.batch_size, a.maxlen_desc  ), dtype=np.float32)
-        xt = np.empty((a.batch_size, a.maxlen_title ), dtype=np.float32)
+
+    xd = np.empty((a.batch_size, a.maxlen_desc  ), dtype=np.float32)
+    xt = np.empty((a.batch_size, a.maxlen_title ), dtype=np.float32)
+    
     batch = 0
     i = 0
     while True:
@@ -728,13 +720,13 @@ def gen(idx, valid=False):
                 
         n_vect = tr_desc_pad[idx[i]].shape[0]
         i_vect = a.maxlen_desc - n_vect
-        xd[batch, i_vect:, ...] = to_categorical(tr_desc_pad[idx[i]], emb_nwords) if a.char_rnn else tr_desc_pad[idx[i]]
+        xd[batch, i_vect:, ...] = tr_desc_pad[idx[i]]
         xd[batch, :i_vect, ...] = 0
 
         n_vect = min(tr_title_pad[idx[i]].shape[0], a.maxlen_title)
         i_vect = a.maxlen_title - n_vect
         
-        xt[batch, i_vect:, ...] = to_categorical(tr_title_pad[idx[i]][:n_vect], emb_nwords) if a.char_rnn else tr_title_pad[idx[i]][:n_vect]
+        xt[batch, i_vect:, ...] = tr_title_pad[idx[i]][:n_vect]
         xt[batch, :i_vect, ...] = 0
                 
         path = f'{PATH}/data/competition_files/train_jpg/{X[fname_idx,idx[i]]}.jpg'
