@@ -301,7 +301,7 @@ if a.use_pretrained:
             # words not found in embedding index will be all-zeros.
             embedding_matrix[i] = embedding_vector
     #print(nonchars)
-    print(f'Words seen in corpus: {len(words_seen)} of which {len(words_seen_in_model)} have pretrained vectors ({100. * len(words_seen_in_model)/len(words_seen):.2f}%).')
+    #print('Words seen in corpus: {len(words_seen)} of which {len(words_seen_in_model)} have pretrained vectors ({100. * len(words_seen_in_model)/len(words_seen):.2f}%).')
 else:
     embedding_matrix = None
 
