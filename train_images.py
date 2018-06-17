@@ -33,6 +33,11 @@ from extra import *
 from keras.applications import *
 import inspect
 
+from multiprocessing import Pool
+from multiprocessing import cpu_count, Process, Queue, JoinableQueue, Lock
+import sharedmem
+
+
 SEED = 42
 np.random.seed(SEED)
 random.seed(SEED)
@@ -106,18 +111,107 @@ os.makedirs(MODEL_FOLDER, exist_ok=True)
 
 TRAIN_DATA = []
 TRAIN_LABELS = []
+LABELS = dict()
 
 for line in open('image_top_1.csv').read().splitlines():
     TRAIN_DATA.append(line.split(',')[0])
     TRAIN_LABELS.append(int(line.split(',')[1]))
+    LABELS[line.split(',')[0]] = line.split(',')[1]
 
 print(len(TRAIN_DATA), len(TRAIN_LABELS))
 
 IDX_TRAIN_SPLIT, IDX_VALID_SPLIT = train_test_split(
-    np.arange(len(TRAIN_DATA)), test_size=0.1, random_state=SEED)
+    TRAIN_DATA, test_size=0.1, random_state=SEED)
 
 print('Training on {} samples'.format(len(IDX_TRAIN_SPLIT)))
 print('Validating on {} samples'.format(len(IDX_VALID_SPLIT)))
+
+
+# multiprocess worker to read items and put them in shared memory for consumer
+
+def process_item_worker(worker_id, lock, shared_mem_X, shared_mem_y, jobs,
+                        results, training):
+    # make sure augmentations are different for each worker
+    new_seed = worker_id
+    np.random.seed(new_seed)
+    random.seed(new_seed)
+
+    while True:
+        item = jobs.get()
+        img, label, item = process_item(item, aug=training)
+        is_good_item = False
+        if img is not None:
+            lock.acquire()
+            shared_mem_X[worker_id, ...] = img
+            shared_mem_y[worker_id, ...] = label
+            is_good_item = True
+        results.put((worker_id, is_good_item, item))
+
+
+def gen(args, items, training=True):
+    predict = False
+    n_workers = (
+        cpu_count() -
+        1) if not predict else 1  # for prediction we need to guarantee order
+    shared_mem_X = sharedmem.empty(
+        (n_workers, CROP_SIZE, CROP_SIZE, 3), dtype=np.float32)
+    shared_mem_y = sharedmem.empty(
+        (n_workers, N_CLASSES), dtype=np.int32)
+
+    locks = [Lock()] * n_workers
+    jobs = Queue(args.batch_size * 4 if not predict else 1)
+    results = JoinableQueue(args.batch_size * 2 if not predict else 1)
+
+    [
+        Process(
+            target=process_item_worker,
+            args=(worker_id, lock, shared_mem_X, shared_mem_y, jobs,
+                  results, training)).start() for worker_id, lock in enumerate(locks)
+    ]
+
+    i = 0
+    X = np.empty(
+        (args.batch_size, CROP_SIZE, CROP_SIZE, 3),
+        dtype=np.float32)
+    y = np.empty(
+        (args.batch_size, N_CLASSES),
+        dtype=np.int32)
+
+    while True:
+
+        random.shuffle(items)
+
+        batch_idx = 0
+
+        items_done = 0
+
+        while items_done < len(items):
+            # fill the queue to make sure CPU is always busy
+            while not jobs.full():
+                item = items[i % len(items)]
+                i += 1
+
+                jobs.put(item)
+                items_done += 1
+
+            # loop over results and yield until no more resuls left
+            get_more_results = True
+            while get_more_results:
+                worker_id, is_good_item, _item = results.get(
+                )  # blocks/waits if None
+                results.task_done()
+
+                if is_good_item:
+                    X[batch_idx], y[batch_idx] = shared_mem_X[
+                        worker_id], shared_mem_y[worker_id]
+                    locks[worker_id].release()
+                    batch_idx += 1
+
+                if batch_idx == args.batch_size:
+                    yield (X, y)
+                    batch_idx = 0
+
+                get_more_results = not results.empty()
 
 def preprocess_image(img):
     
@@ -197,50 +291,18 @@ def augment_soft(img):
 
     return img
 
-def process_item(img_path, aug=False):
-    img = jpeg.JPEG(img_path).decode()
+def process_item(item, aug=False):
+    img = jpeg.JPEG(item+'.jpg').decode()
     if aug:
         img = augment_soft(img)
     else:
         img = cv2.resize(img, (CROP_SIZE, CROP_SIZE))
+    label = LABELS[item]
+    label = to_categorical(label, N_CLASSES) 
     img = preprocess_image(img)
     if len(img.shape) != 3:
-        return None
-    return img
-
-def train_generator(args):
-    random.shuffle(IDX_TRAIN_SPLIT)
-    while True:
-        for start in range(0, len(IDX_TRAIN_SPLIT), args.batch_size):
-            x_batch = []
-            y_batch = []
-            end = min(start + args.batch_size, len(IDX_TRAIN_SPLIT))
-            idx_train_batch = IDX_TRAIN_SPLIT[start:end]
-            for idx in idx_train_batch:
-                image = process_item(TRAIN_DATA[idx] + '.jpg', aug=True)
-                if image is not None:
-                    x_batch.append(process_item(TRAIN_DATA[idx] + '.jpg', aug=True))
-                    y_batch.append(to_categorical(TRAIN_LABELS[idx], N_CLASSES))
-            x_batch = np.array(x_batch, np.float32)
-            y_batch = np.array(y_batch, np.float32)
-            yield x_batch, y_batch
-
-
-def valid_generator(args):
-    while True:
-        for start in range(0, len(IDX_VALID_SPLIT), args.batch_size):
-            x_batch = []
-            y_batch = []
-            end = min(start + args.batch_size, len(IDX_VALID_SPLIT))
-            idx_train_batch = IDX_VALID_SPLIT[start:end]
-            for idx in idx_train_batch:
-                image = process_item(TRAIN_DATA[idx] + '.jpg', aug=False)
-                if image is not None:
-                    x_batch.append(image)
-                    y_batch.append(to_categorical(TRAIN_LABELS[idx], N_CLASSES))
-            x_batch = np.array(x_batch, np.float32)
-            y_batch = np.array(y_batch, np.float32)
-            yield x_batch, y_batch
+        return None, None, None
+    return img, label, item
 
 
 if args.model:
@@ -405,14 +467,14 @@ if training:
         callbacks.append(reduce_lr)
 
     model.fit_generator(
-        use_multiprocessing=True,
-        generator=train_generator(args),
+        use_multiprocessing=False,
+        generator=gen(args, IDX_TRAIN_SPLIT, True),
         steps_per_epoch=np.ceil(
             float(len(IDX_TRAIN_SPLIT)) / float(args.batch_size)) - 1,
         epochs=args.max_epoch,
         verbose=1,
         callbacks=callbacks,
-        validation_data=valid_generator(args),
+        validation_data=gen(args, IDX_VALID_SPLIT, False),
         validation_steps=np.ceil(
             float(len(IDX_VALID_SPLIT)) / float(args.batch_size)) - 1,
         initial_epoch=last_epoch)
