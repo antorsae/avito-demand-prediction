@@ -65,6 +65,7 @@ parser.add_argument('-fc', '--fully-connected-layers', nargs='+', type=int, defa
 parser.add_argument('-ui',  '--use-images', action='store_true', help='Use images')
 parser.add_argument('-ife', '--image-feature-extractor', default='ResNet50', help='Image feature extractor model')
 parser.add_argument('-ifb', '--image-features-bottleneck', type=int, default=16, help='')
+parser.add_argument('-uut', '--userid-unique-threshold', type=int, default=2, help='Group user_id items whose count is below this threshold (for embedding)')
 
 parser.add_argument('-mlt', '--maxlen-title', type=int, default= 16, help='')
 parser.add_argument('-mld', '--maxlen-desc',  type=int, default=256, help='')
@@ -97,14 +98,15 @@ config = argparse.Namespace()
 # In[25]:
 
 
-def to_categorical_idx(col, df_trn, df_test, drop_uniques=False):
+def to_categorical_idx(col, df_trn, df_test, drop_uniques=0):
     merged = pd.concat([df_trn[col], df_test[col]])
+    if drop_uniques != 0:
+        unique, inverse, counts = np.unique(merged, return_counts=True, return_inverse=True)
+        unique_with_zeros = np.select([counts < drop_uniques, counts >= drop_uniques], [unique * 0, unique])
+        merged = unique_with_zeros[inverse]
+
     train_size = df_trn[col].shape[0]
     idxs, uniques = pd.factorize(merged)
-    if drop_uniques:
-        pdf = pd.factorize(df_x_train['user_id'])
-        dup_idx = np.unique(idxs, return_counts=True)[1] > 1
-        dup_nonuniques = uniques[dup_idx]
     
     return idxs[:train_size], idxs[train_size:], uniques
 
@@ -122,7 +124,9 @@ tr_p1, te_p1, tknzr_p1 = to_categorical_idx('param_1', df_x_train, df_test)
 tr_p2, te_p2, tknzr_p2 = to_categorical_idx('param_2', df_x_train, df_test)
 tr_p3, te_p3, tknzr_p3 = to_categorical_idx('param_3', df_x_train, df_test)
 
-tr_userid, te_userid, tknzr_userid = to_categorical_idx('user_id', df_x_train, df_test)
+tr_userid, te_userid, tknzr_userid = to_categorical_idx('user_id', df_x_train, df_test, drop_uniques=a.userid_unique_threshold)
+print(tr_userid[:1000])
+print(len(tknzr_userid))
 
 # In[27]:
 
@@ -367,7 +371,7 @@ config.emb_imgt1 = min(max_emb,(config.len_imgt1 + 1)//2)
 config.emb_p1    = min(max_emb,(config.len_p1    + 1)//2)
 config.emb_p2    = min(max_emb,(config.len_p2    + 1)//2)
 config.emb_p3    = min(max_emb,(config.len_p3    + 1)//2)
-config.emb_userid= min(2,(config.len_userid+ 1)//2) # FIX ME--  HACKED!!!!
+config.emb_userid= min(max_emb,(config.len_userid+ 1)//2) 
 
 #continuous
 config.emb_price   = 16
