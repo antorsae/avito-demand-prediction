@@ -22,6 +22,7 @@ from keras.utils import to_categorical
 import argparse
 from fastText import load_model
 from keras.preprocessing.sequence import pad_sequences
+from optimizer_callback import OptimizerCallback
 
 from tensorflow.python.client import device_lib
 def get_available_gpus():
@@ -32,7 +33,7 @@ gpus = len(get_available_gpus())
 
 
 PATH = '.'
-print(os.listdir(f'{PATH}'))
+print(os.listdir(PATH))
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--max-epoch', type=int, default=200, help='Epoch to run')
@@ -40,6 +41,7 @@ parser.add_argument('-b',   '--batch-size', type=int, default=None, help='Batch 
 parser.add_argument('-l',   '--learning-rate', type=float, default=1e-3, help='Initial learning rate')
 parser.add_argument('-nbn', '--no-batchnorm', action='store_true', help='Do NOT use batch norm')
 parser.add_argument('-do',  '--dropout', type=float, default=0, help='Dropout rate')
+parser.add_argument('-opt', '--opt', action='store_true', help='use OptimizerCallback')
 
 parser.add_argument('-m', '--model', help='load hdf5 model (and continue training)')
 parser.add_argument('-t', '--test', action='store_true', help='Test model and generate CSV submission file')
@@ -947,7 +949,7 @@ def gen(idx, valid=False):
         xt[batch, i_vect:, ...] = tr_title_pad[idx[i]][:n_vect]
         xt[batch, :i_vect, ...] = 0
                 
-        path = f'{PATH}/data/competition_files/train_jpg/{X[fname_idx,idx[i]]}.jpg'
+        path = 'data/competition_files/train_jpg/{X[fname_idx,idx[i]]}.jpg'
 
         filesize = -1
         try:
@@ -1006,11 +1008,14 @@ if gpus > 1 : model = multi_gpu_model(model, gpus=gpus)
 
 ### callbacks
 checkpoint = ModelCheckpoint(
-    f'best-use_pretrained{a.use_pretrained}-use_images{a.use_images}-finetune_pretrained{a.finetune_pretrained}.hdf5', 
+    'best.hdf5', 
     monitor='val_loss', verbose=1, save_best_only=True)
 early = EarlyStopping(patience=10, mode='min')
 reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-7, verbose=1, mode='min')
 
+callbacks = [checkpoint, early, reduce_lr] 
+if a.opt:
+    callbacks.append(OptimizerCallback())
 
 # In[82]:
 
@@ -1026,7 +1031,7 @@ model.fit_generator(
     validation_data  = gen(valid_idx, valid=True), 
     validation_steps = len(valid_idx) // a.batch_size, 
     epochs = a.max_epoch, 
-    callbacks=[checkpoint, early, reduce_lr], 
+    callbacks=callbacks, 
     verbose=1)
 
 
@@ -1035,7 +1040,7 @@ model.fit_generator(
 
 pred = model.predict(X_test)
 
-subm = pd.read_csv(f'{PATH}/sample_submission.csv')
+subm = pd.read_csv('sample_submission.csv')
 subm['deal_probability'] = pred
 subm.to_csv('submit_{}_{:.4f}.csv'.format('nn_p3', 0.2226), index=False)
 
