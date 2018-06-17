@@ -285,14 +285,21 @@ print(tknzr.texts_to_sequences(["результат голубые складн�
 chars    = set(u"абвгдеёзийклмнопрстуфхъыьэжцчшщюяabcdefghijklmnopqrstuwxyz0123456789")
 if a.use_pretrained:
     lang_model = ft_load_model('cc.ru.300.bin')
+    words_in_model = set(lang_model.get_words())
+    words_seen = set()
+    words_seen_in_model = set()
     embedding_matrix = np.zeros((emb_nwords+1, a.emb_text), dtype=np.float32)
     for word, i in tqdm(list(tknzr.word_index.items())[:emb_nwords]):
         #nonchars.update(set(word).difference( chars))
         embedding_vector = lang_model.get_word_vector(word)[:a.emb_text]
+        words_seen.add(word)
+        if word in words_in_model:
+            words_seen_in_model.add(word)
         if embedding_vector is not None:
             # words not found in embedding index will be all-zeros.
             embedding_matrix[i] = embedding_vector
     #print(nonchars)
+    print(f'Words seen in corpus: {len(words_seen)} of which {len(words_seen_in_model)} have pretrained vectors ({100. * len(words_seen_in_model)/len(words_seen):.2f}%).')
 else:
     embedding_matrix = None
 
