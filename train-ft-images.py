@@ -100,7 +100,7 @@ df_test    = pd.read_feather('df_test')
 
 #create config init
 config = argparse.Namespace()
-
+N_CLASSES = 100
 
 # In[25]:
 
@@ -132,7 +132,7 @@ tr_p2, te_p2, tknzr_p2 = to_categorical_idx('param_2', df_x_train, df_test)
 tr_p3, te_p3, tknzr_p3 = to_categorical_idx('param_3', df_x_train, df_test)
 
 tr_userid, te_userid, tknzr_userid = to_categorical_idx('user_id', df_x_train, df_test, drop_uniques=a.userid_unique_threshold)
-print(f'Found {len(tknzr_userid)-1} user_ids whose value count was >= {a.userid_unique_threshold}')
+#print(f'Found {len(tknzr_userid)-1} user_ids whose value count was >= {a.userid_unique_threshold}')
 
 # In[27]:
 
@@ -423,6 +423,20 @@ gc.collect()
 def root_mean_squared_error(y_true, y_pred):
     return K.sqrt(K.mean(K.square(y_pred - y_true))) 
 
+def root_mean_squared_error_for_classification(y_true, y_pred):
+    y_pred = K.cast(K.argmax(y_pred) / N_CLASSES, 'float32')
+    return K.sqrt(K.mean(K.square(y_pred - y_true)))
+
+def regression_as_classification_loss(y_true, y_pred):
+    #y_true = single float
+    #y_pred = softmax layer
+
+    dist_map = K.constant(np.array(np.arange(N_CLASSES) / (N_CLASSES * 1.0), dtype=np.float32))
+
+    distance = K.abs(y_true-dist_map)
+    distance = K.cast(distance, 'float32')
+    loss = K.mean(-K.sum(K.log(y_pred + K.constant(1e-10)) * K.exp(-distance / 3.0)))
+    return loss
 
 # In[46]:
 
@@ -658,7 +672,7 @@ def get_model():
         conc_desc = act_fn(**act_pa)(conc_desc)
         if do > 0.: conc_desc = Dropout(do)(conc_desc)
 
-    outp = Dense(1, activation='sigmoid', name='output')(conc_desc)
+    outp = Dense(N_CLASSES, activation='softmax', name='output')(conc_desc)
 
     inputs = [inp_reg, inp_pcn, inp_cn, inp_ut, inp_city, inp_week, inp_imgt1, inp_p1, inp_p2, inp_p3,
               inp_price, inp_itemseq, inp_desc, inp_title, 
@@ -805,7 +819,7 @@ if a.opt:
 
 
 model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
-              loss = root_mean_squared_error, metrics=[root_mean_squared_error])
+              loss = regression_as_classification_loss, metrics=[regression_as_classification_loss, root_mean_squared_error_for_classification])
 
 # In[ ]:
 
