@@ -7,7 +7,7 @@ from os.path import join
 from pathlib import Path
 import numpy as np
 import math
-
+import re
 #KERAS_BACKEND='tensorflow' python3 train_images.py  -p avg -cm ResNet152 -nfc -bf 4096 -fcm -uiw
 
 from keras.optimizers import Adam, Adadelta, SGD
