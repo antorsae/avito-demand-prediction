@@ -22,6 +22,7 @@ from keras.utils import to_categorical
 import argparse
 from fastText import load_model as ft_load_model
 from keras.preprocessing.sequence import pad_sequences
+from optimizer_callback import OptimizerCallback
 from multi_gpu_keras import multi_gpu_model
 
 from keras.layers import Input, Embedding, Dense, BatchNormalization, Activation, Dropout, PReLU
@@ -52,6 +53,7 @@ parser.add_argument('-b',   '--batch-size', type=int, default=None, help='Batch 
 parser.add_argument('-l',   '--learning-rate', type=float, default=1e-3, help='Initial learning rate')
 parser.add_argument('-nbn', '--no-batchnorm', action='store_true', help='Do NOT use batch norm')
 parser.add_argument('-do',  '--dropout', type=float, default=0, help='Dropout rate')
+parser.add_argument('-opt', '--opt', action='store_true', help='use OptimizerCallback')
 parser.add_argument('-af',  '--activation-function', default='relu', help='Activation function to use (relu|prelu), e.g. -af prelu')
 
 parser.add_argument('-m', '--model', help='load hdf5 model (and continue training)')
@@ -104,7 +106,7 @@ df_test    = pd.read_feather('df_test')
 
 #create config init
 config = argparse.Namespace()
-
+N_CLASSES = 100
 
 # In[25]:
 
@@ -136,7 +138,7 @@ tr_p2, te_p2, tknzr_p2 = to_categorical_idx('param_2', df_x_train, df_test)
 tr_p3, te_p3, tknzr_p3 = to_categorical_idx('param_3', df_x_train, df_test)
 
 tr_userid, te_userid, tknzr_userid = to_categorical_idx('user_id', df_x_train, df_test, drop_uniques=a.userid_unique_threshold)
-print(f'Found {len(tknzr_userid)-1} user_ids whose value count was >= {a.userid_unique_threshold}')
+#print(f'Found {len(tknzr_userid)-1} user_ids whose value count was >= {a.userid_unique_threshold}')
 
 # In[27]:
 
@@ -296,7 +298,6 @@ if not a.char_rnn:
     print(emb_nwords, len(tknzr.word_index))
     print([(k,v) for k,v in tknzr.word_index.items()][49900:50100])
     print(tknzr.texts_to_sequences(["результат голубые складная оф кругликовской отказались ‐ бесп"]))
-        
     #nonchars = set()
     chars    = set(u"абвгдеёзийклмнопрстуфхъыьэжцчшщюяabcdefghijklmnopqrstuwxyz0123456789")
     if a.use_pretrained:
@@ -315,7 +316,7 @@ if not a.char_rnn:
                 # words not found in embedding index will be all-zeros.
                 embedding_matrix[i] = embedding_vector
         #print(nonchars)
-        print(f'Words seen in corpus: {len(words_seen)} of which {len(words_seen_in_model)} have pretrained vectors ({100. * len(words_seen_in_model)/len(words_seen):.2f}%).')
+        #print(f'Words seen in corpus: {len(words_seen)} of which {len(words_seen_in_model)} have pretrained vectors ({100. * len(words_seen_in_model)/len(words_seen):.2f}%).')
     else:
         embedding_matrix = None
 else:
@@ -422,6 +423,20 @@ gc.collect()
 def root_mean_squared_error(y_true, y_pred):
     return K.sqrt(K.mean(K.square(y_pred - y_true))) 
 
+def root_mean_squared_error_for_classification(y_true, y_pred):
+    y_pred = K.cast(K.argmax(y_pred) / N_CLASSES, 'float32')
+    return K.sqrt(K.mean(K.square(y_pred - y_true)))
+
+def regression_as_classification_loss(y_true, y_pred):
+    #y_true = single float
+    #y_pred = softmax layer
+
+    dist_map = K.constant(np.array(np.arange(N_CLASSES) / (N_CLASSES * 1.0), dtype=np.float32))
+
+    distance = K.abs(y_true-dist_map)
+    distance = K.cast(distance, 'float32')
+    loss = K.mean(-K.sum(K.log(y_pred + K.constant(1e-10)) * K.exp(-distance / 3.0)))
+    return loss
 
 # In[46]:
 
@@ -661,7 +676,7 @@ def get_model():
         conc_desc = act_fn(**act_pa)(conc_desc)
         if do > 0.: conc_desc = Dropout(do)(conc_desc)
 
-    outp = Dense(1, activation='sigmoid', name='output')(conc_desc)
+    outp = Dense(N_CLASSES, activation='softmax', name='output')(conc_desc)
 
     inputs = [inp_reg, inp_pcn, inp_cn, inp_ut, inp_city, inp_week, inp_imgt1, inp_p1, inp_p2, inp_p3,
               inp_price, inp_itemseq, inp_desc, inp_title, 
@@ -733,7 +748,7 @@ def gen(idx, valid=False):
         xt[batch, i_vect:, ...] = tr_title_pad[idx[i]][:n_vect]
         xt[batch, :i_vect, ...] = 0
                 
-        path = f'{PATH}/data/competition_files/train_jpg/{X[fname_idx,idx[i]]}.jpg'
+        path = 'data/competition_files/train_jpg/{X[fname_idx,idx[i]]}.jpg'
 
         if a.use_images:
             xi[batch, ...] = 0.
@@ -795,17 +810,20 @@ if gpus > 1 : model = multi_gpu_model(model, gpus=gpus)
 
 ### callbacks
 checkpoint = ModelCheckpoint(
-    f'best-use_pretrained{a.use_pretrained}-use_images{a.use_images}-finetune_pretrained{a.finetune_pretrained}.hdf5', 
+    'best.hdf5', 
     monitor='val_loss', verbose=1, save_best_only=True)
 early = EarlyStopping(patience=10, mode='min')
 reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-7, verbose=1, mode='min')
 
+callbacks = [checkpoint, early, reduce_lr] 
+if a.opt:
+    callbacks.append(OptimizerCallback())
 
 # In[82]:
 
 
 model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
-              loss = root_mean_squared_error, metrics=[root_mean_squared_error])
+              loss = regression_as_classification_loss, metrics=[regression_as_classification_loss, root_mean_squared_error_for_classification])
 
 # In[ ]:
 
@@ -815,7 +833,7 @@ model.fit_generator(
     validation_data  = gen(valid_idx, valid=True), 
     validation_steps = len(valid_idx) // a.batch_size, 
     epochs = a.max_epoch, 
-    callbacks=[checkpoint, early, reduce_lr], 
+    callbacks=callbacks, 
     verbose=1)
 
 
@@ -824,7 +842,7 @@ model.fit_generator(
 
 pred = model.predict(X_test)
 
-subm = pd.read_csv(f'{PATH}/sample_submission.csv')
+subm = pd.read_csv('sample_submission.csv')
 subm['deal_probability'] = pred
 subm.to_csv('submit_{}_{:.4f}.csv'.format('nn_p3', 0.2226), index=False)
 
