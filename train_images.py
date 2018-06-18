@@ -36,7 +36,7 @@ import inspect
 from multiprocessing import Pool
 from multiprocessing import cpu_count, Process, Queue, JoinableQueue, Lock
 import sharedmem
-
+import cv2
 
 SEED = 42
 np.random.seed(SEED)
@@ -292,7 +292,13 @@ def augment_soft(img):
     return img
 
 def process_item(item, aug=False):
-    img = jpeg.JPEG(item+'.jpg').decode()
+    ok = True
+    try:
+        img = jpeg.JPEG(item+'.jpg').decode()
+    except:
+        ok = False
+    if not ok:
+        return None, None, None
     if aug:
         img = augment_soft(img)
     else:
