@@ -57,11 +57,14 @@ parser.add_argument('-af',  '--activation-function', default='relu', help='Activ
 parser.add_argument('-m', '--model', help='load hdf5 model (and continue training)')
 parser.add_argument('-t', '--test', action='store_true', help='Test model and generate CSV submission file')
 
-parser.add_argument('-up', '--use-pretrained',      action='store_true', help='Use pretrained weights')
-parser.add_argument('-fp', '--finetune-pretrained', action='store_true', help='Finetune pretrained weights')
-parser.add_argument('-fw', '--ft-words',            type=int, default=50000, help='Number of most frequent words (tokens) to finetune')
+parser.add_argument('-up',  '--use-pretrained',      action='store_true', help='Use pretrained weights')
+parser.add_argument('-fp',  '--finetune-pretrained', action='store_true', help='Finetune pretrained weights')
+parser.add_argument('-fw',  '--ft-words',            type=int, default=50000, help='Number of most frequent words (tokens) to finetune')
+parser.add_argument('-ftm', '--fasttext-model',      default='cc.ru.300.bin', help='FastText model (for pretrained text embeddings)')
 
 parser.add_argument('-fc', '--fully-connected-layers', nargs='+', type=int, default=[2048,1024,512,256], help='Specify last FC layers, e.g. -fc 1024 512 256')
+
+parser.add_argument('-me',  '--max-emb', type=int, default=64, help='Maximum size of embedding vectors for categorical features')
 
 parser.add_argument('-ui',   '--use-images', action='store_true', help='Use images')
 parser.add_argument('-ife',  '--image-feature-extractor', default='ResNet50', help='Image feature extractor model')
@@ -76,8 +79,11 @@ parser.add_argument('-mlt', '--maxlen-title', type=int, default= 16, help='')
 parser.add_argument('-mld', '--maxlen-desc',  type=int, default=256, help='')
 parser.add_argument('-et',  '--emb-text',     type=int, default=300, help='')
 
-parser.add_argument('-rnnc', '--rnn-channels',            type=int, default=None, help='')
-parser.add_argument('-rnncb','--rnn-channels-bottleneck', type=int, default=None, help='')
+parser.add_argument('-rnnl', '--rnn-layers',              type=int, default=1,    help='Number of RNN (GRU) layers')
+parser.add_argument('-rnnc', '--rnn-channels',            type=int, default=None, help='Number of channels of first RNN layers')
+parser.add_argument('-rnncb','--rnn-channels-bottleneck', type=int, default=None, help='Number of channels of last RNN layer')
+
+
 
 a = parser.parse_args()
 
@@ -294,7 +300,7 @@ if not a.char_rnn:
     #nonchars = set()
     chars    = set(u"абвгдеёзийклмнопрстуфхъыьэжцчшщюяabcdefghijklmnopqrstuwxyz0123456789")
     if a.use_pretrained:
-        lang_model = ft_load_model('cc.ru.300.bin')
+        lang_model = ft_load_model(a.fasttext_model)
         words_in_model = set(lang_model.get_words())
         words_seen = set()
         words_seen_in_model = set()
@@ -355,23 +361,17 @@ config.len_itemseq = 1
 # In[40]:
 
 ## categorical
-max_emb = 64
-config.emb_reg   = min(max_emb,(config.len_reg   + 1)//2)
-config.emb_pcn   = min(max_emb,(config.len_pcn   + 1)//2)
-config.emb_cn    = min(max_emb,(config.len_cn    + 1)//2)
-config.emb_ut    = min(max_emb,(config.len_ut    + 1)//2)
-config.emb_city  = min(max_emb,(config.len_city  + 1)//2)
-config.emb_week  = min(max_emb,(config.len_week  + 1)//2)
-config.emb_imgt1 = min(max_emb,(config.len_imgt1 + 1)//2)
-config.emb_p1    = min(max_emb,(config.len_p1    + 1)//2)
-config.emb_p2    = min(max_emb,(config.len_p2    + 1)//2)
-config.emb_p3    = min(max_emb,(config.len_p3    + 1)//2)
-config.emb_userid= min(max_emb,(config.len_userid+ 1)//2) 
-
-#continuous
-config.emb_price   = 16
-
-#text
+config.emb_reg   = min(a.max_emb,(config.len_reg   + 1)//2)
+config.emb_pcn   = min(a.max_emb,(config.len_pcn   + 1)//2)
+config.emb_cn    = min(a.max_emb,(config.len_cn    + 1)//2)
+config.emb_ut    = min(a.max_emb,(config.len_ut    + 1)//2)
+config.emb_city  = min(a.max_emb,(config.len_city  + 1)//2)
+config.emb_week  = min(a.max_emb,(config.len_week  + 1)//2)
+config.emb_imgt1 = min(a.max_emb,(config.len_imgt1 + 1)//2)
+config.emb_p1    = min(a.max_emb,(config.len_p1    + 1)//2)
+config.emb_p2    = min(a.max_emb,(config.len_p2    + 1)//2)
+config.emb_p3    = min(a.max_emb,(config.len_p3    + 1)//2)
+config.emb_userid= min(a.max_emb,(config.len_userid+ 1)//2) 
 
 
 # In[41]:
@@ -634,10 +634,14 @@ def get_model():
     inp_title = Input(shape=(a.maxlen_title, ), name='inp_title')
     emb_title = embedding_text(inp_title)
 
-    desc_layer = CuDNNGRU(a.rnn_channels,            return_sequences=True)(emb_desc)
+    desc_layer = emb_desc
+    for _ in range(a.rnn_layers):
+        desc_layer = CuDNNGRU(a.rnn_channels,        return_sequences=True)(desc_layer)
     desc_layer = CuDNNGRU(a.rnn_channels_bottleneck, return_sequences=False)(desc_layer)
 
-    title_layer = CuDNNGRU(a.rnn_channels,            return_sequences=True)(emb_title)
+    title_layer = emb_title
+    for _ in range(a.rnn_layers):
+        title_layer = CuDNNGRU(a.rnn_channels,        return_sequences=True)(title_layer)
     title_layer = CuDNNGRU(a.rnn_channels_bottleneck, return_sequences=False)(title_layer)
 
     conc_desc = concatenate([x, desc_layer, title_layer], axis=-1)
