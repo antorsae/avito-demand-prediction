@@ -60,18 +60,18 @@ parser.add_argument('-t', '--test', action='store_true', help='Test model and ge
 parser.add_argument('-up',  '--use-pretrained',      action='store_true', help='Use pretrained weights')
 parser.add_argument('-fp',  '--finetune-pretrained', action='store_true', help='Finetune pretrained weights')
 parser.add_argument('-fw',  '--ft-words',            type=int, default=50000, help='Number of most frequent words (tokens) to finetune')
-parser.add_argument('-ftm', '--fasttext-model',      default='cc.ru.300.bin', help='FastText model (for pretrained text embeddings)')
+parser.add_argument('-ftm', '--fasttext-model',      default='avito.ru.300.bin', help='FastText model (for pretrained text embeddings)')
 
-parser.add_argument('-fc', '--fully-connected-layers', nargs='+', type=int, default=[2048,1024,512,256], help='Specify last FC layers, e.g. -fc 1024 512 256')
+parser.add_argument('-fc', '--fully-connected-layers', nargs='+', type=int, default=[512], help='Specify last FC layers, e.g. -fc 1024 512 256')
 
 parser.add_argument('-me',  '--max-emb', type=int, default=64, help='Maximum size of embedding vectors for categorical features')
 
 parser.add_argument('-ui',   '--use-images', action='store_true', help='Use images')
 parser.add_argument('-ife',  '--image-feature-extractor', default='ResNet50', help='Image feature extractor model')
-parser.add_argument('-ifb',  '--image-features-bottleneck', type=int, default=16, help='')
+parser.add_argument('-ifb',  '--image-features-bottleneck', type=int, default=None, help='')
 parser.add_argument('-iffu', '--image-feature-freeze-until', default=None, help='Freeze image feature extractor layers until layer e.g. -iffu res5b_branch2a')
 
-parser.add_argument('-uut', '--userid-unique-threshold', type=int, default=2, help='Group user_id items whose count is below this threshold (for embedding)')
+parser.add_argument('-uut', '--userid-unique-threshold', type=int, default=16, help='Group user_id items whose count is below this threshold (for embedding)')
 
 parser.add_argument('-char', '--char-rnn', action='store_true', help='User char-based RNN')
 
@@ -649,7 +649,8 @@ def get_model():
     if a.use_images:
         inp_image = Input(shape=(CROP_SIZE, CROP_SIZE, 3), name='inp_image')
         image_features = classifier_model(inp_image)
-        image_features = Dense(a.image_features_bottleneck)(image_features)
+        if a.image_features_bottleneck is not None:
+            image_features = Dense(a.image_features_bottleneck)(image_features)
         if bn: image_features = BatchNormalization()(image_features)
         image_features = act_fn(**act_pa)(image_features)
         if do > 0.: image_features = Dropout(do)(image_features)
