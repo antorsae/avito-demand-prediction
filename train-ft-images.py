@@ -54,6 +54,7 @@ parser.add_argument('-l',   '--learning-rate', type=float, default=1e-3, help='I
 parser.add_argument('-nbn', '--no-batchnorm', action='store_true', help='Do NOT use batch norm')
 parser.add_argument('-do',  '--dropout', type=float, default=0, help='Dropout rate')
 parser.add_argument('-opt', '--opt', action='store_true', help='use OptimizerCallback')
+parser.add_argument('-af',  '--activation-function', default='relu', help='Activation function to use (relu|prelu), e.g. -af prelu')
 
 parser.add_argument('-m', '--model', help='load hdf5 model (and continue training)')
 parser.add_argument('-t', '--test', action='store_true', help='Test model and generate CSV submission file')
@@ -64,9 +65,14 @@ parser.add_argument('-fw', '--ft-words',            type=int, default=50000, hel
 
 parser.add_argument('-fc', '--fully-connected-layers', nargs='+', type=int, default=[2048,1024,512,256], help='Specify last FC layers, e.g. -fc 1024 512 256')
 
-parser.add_argument('-ui',  '--use-images', action='store_true', help='Use images')
-parser.add_argument('-ife', '--image-feature-extractor', default='ResNet50', help='Image feature extractor model')
-parser.add_argument('-ifb', '--image-features-bottleneck', type=int, default=16, help='')
+parser.add_argument('-ui',   '--use-images', action='store_true', help='Use images')
+parser.add_argument('-ife',  '--image-feature-extractor', default='ResNet50', help='Image feature extractor model')
+parser.add_argument('-ifb',  '--image-features-bottleneck', type=int, default=16, help='')
+parser.add_argument('-iffu', '--image-feature-freeze-until', default=None, help='Freeze image feature extractor layers until layer e.g. -iffu res5b_branch2a')
+
+parser.add_argument('-uut', '--userid-unique-threshold', type=int, default=2, help='Group user_id items whose count is below this threshold (for embedding)')
+
+parser.add_argument('-char', '--char-rnn', action='store_true', help='User char-based RNN')
 
 parser.add_argument('-mlt', '--maxlen-title', type=int, default= 16, help='')
 parser.add_argument('-mld', '--maxlen-desc',  type=int, default=256, help='')
@@ -99,14 +105,15 @@ config = argparse.Namespace()
 # In[25]:
 
 
-def to_categorical_idx(col, df_trn, df_test, drop_uniques=False):
+def to_categorical_idx(col, df_trn, df_test, drop_uniques=0):
     merged = pd.concat([df_trn[col], df_test[col]])
+    if drop_uniques != 0:
+        unique, inverse, counts = np.unique(merged, return_counts=True, return_inverse=True)
+        unique_with_zeros = np.select([counts < drop_uniques, counts >= drop_uniques], [unique * 0, unique])
+        merged = unique_with_zeros[inverse]
+
     train_size = df_trn[col].shape[0]
     idxs, uniques = pd.factorize(merged)
-    if drop_uniques:
-        pdf = pd.factorize(df_x_train['user_id'])
-        dup_idx = np.unique(idxs, return_counts=True)[1] > 1
-        dup_nonuniques = uniques[dup_idx]
     
     return idxs[:train_size], idxs[train_size:], uniques
 
@@ -124,10 +131,10 @@ tr_p1, te_p1, tknzr_p1 = to_categorical_idx('param_1', df_x_train, df_test)
 tr_p2, te_p2, tknzr_p2 = to_categorical_idx('param_2', df_x_train, df_test)
 tr_p3, te_p3, tknzr_p3 = to_categorical_idx('param_3', df_x_train, df_test)
 
-tr_userid, te_userid, tknzr_userid = to_categorical_idx('user_id', df_x_train, df_test)
+tr_userid, te_userid, tknzr_userid = to_categorical_idx('user_id', df_x_train, df_test, drop_uniques=a.userid_unique_threshold)
+print(f'Found {len(tknzr_userid)-1} user_ids whose value count was >= {a.userid_unique_threshold}')
 
 # In[27]:
-
 
 tr_week = pd.to_datetime(df_x_train['activation_date']).dt.weekday.astype(np.int32).values
 te_week = pd.to_datetime(df_test['activation_date']).dt.weekday.astype(np.int32).values
@@ -147,18 +154,17 @@ te_imgt1 = np.expand_dims(te_imgt1, axis=-1)
 # In[66]:
 
 if True:
-    epsilon = 1e-8
-    tr_price = np.log1p(df_x_train['price'] )
-    te_price = np.log1p(df_test['price'] )
-    tr_has_price = 1. - np.isnan(tr_price.values) * 2.
-    te_has_price = 1. - np.isnan(te_price.values) * 2.
+    tr_price = np.log1p(df_x_train['price'].values)
+    te_price = np.log1p(df_test['price'].values)
+    tr_has_price = 1. - np.isnan(tr_price) * 2.
+    te_has_price = 1. - np.isnan(te_price) * 2.
 
-    tr_price[tr_price.isna()] = tr_price.mean()
-    te_price[te_price.isna()] = te_price.mean()
-    tr_price -= tr_price.mean()
-    te_price -= te_price.mean()
-    tr_price /= tr_price.std()
-    te_price /= te_price.std()
+    tr_price -= np.nanmean(tr_price)
+    te_price -= np.nanmean(te_price)
+    tr_price /= np.nanstd(tr_price)
+    te_price /= np.nanstd(te_price)
+    tr_price[np.isnan(tr_price)] = np.nanmean(tr_price)
+    te_price[np.isnan(te_price)] = np.nanmean(te_price)
 
 else:
     max_price = df_x_train['price'].max()
@@ -256,71 +262,65 @@ te_n_user_items /= te_n_user_items.std()
 # no filers and lowers b/c tets already prepropcessed in feather 
 filters = ''
 lower   = False
+norm_preffix = '' if a.char_rnn else 'norm_'
 
 print("Tokenizing started")
-tknzr = Tokenizer(num_words=a.ft_words if a.finetune_pretrained else None, lower=lower, filters=filters)
+tknzr = Tokenizer(num_words=a.ft_words if a.finetune_pretrained else None, 
+    lower=lower, 
+    filters=filters,
+    char_level = a.char_rnn)
 tknzr.fit_on_texts(pd.concat([
-    df_x_train['description'], 
-    df_x_train['title'], 
-    df_x_train['param_1'],
-    df_x_train['param_2'],
-    df_x_train['param_3'],
-    df_test['description'], 
-    df_test['title'], 
-    df_test['param_1'],
-    df_test['param_2'],
-    df_test['param_3'],
+    df_x_train[norm_preffix + 'description'], 
+    df_x_train[norm_preffix + 'title'], 
+    df_x_train[norm_preffix + 'param_1'],
+    df_x_train[norm_preffix + 'param_2'],
+    df_x_train[norm_preffix + 'param_3'],
+    df_test[norm_preffix + 'description'], 
+    df_test[norm_preffix + 'title'], 
+    df_test[norm_preffix + 'param_1'],
+    df_test[norm_preffix + 'param_2'],
+    df_test[norm_preffix + 'param_3'],
 ]).values)
 print("Tokenizing finished")
 
 
 # In[35]:
 
+if not a.char_rnn:
+    emb_nwords = a.ft_words if a.finetune_pretrained else len(tknzr.word_index)
 
-emb_nwords = a.ft_words if a.finetune_pretrained else len(tknzr.word_index)
-
-print(emb_nwords, len(tknzr.word_index))
-print([(k,v) for k,v in tknzr.word_index.items()][49900:50100])
-print(tknzr.texts_to_sequences(["результат голубые складная оф кругликовской отказались ‐ бесп"]))
-    
-#nonchars = set()
-chars    = set(u"абвгдеёзийклмнопрстуфхъыьэжцчшщюяabcdefghijklmnopqrstuwxyz0123456789")
-if a.use_pretrained:
-    lang_model = ft_load_model('cc.ru.300.bin')
-    words_in_model = set(lang_model.get_words())
-    words_seen = set()
-    words_seen_in_model = set()
-    embedding_matrix = np.zeros((emb_nwords+1, a.emb_text), dtype=np.float32)
-    for word, i in tqdm(list(tknzr.word_index.items())[:emb_nwords]):
-        #nonchars.update(set(word).difference( chars))
-        embedding_vector = lang_model.get_word_vector(word)[:a.emb_text]
-        words_seen.add(word)
-        if word in words_in_model:
-            words_seen_in_model.add(word)
-        if embedding_vector is not None:
-            # words not found in embedding index will be all-zeros.
-            embedding_matrix[i] = embedding_vector
-    #print(nonchars)
-    #print('Words seen in corpus: {len(words_seen)} of which {len(words_seen_in_model)} have pretrained vectors ({100. * len(words_seen_in_model)/len(words_seen):.2f}%).')
+    print(emb_nwords, len(tknzr.word_index))
+    print([(k,v) for k,v in tknzr.word_index.items()][49900:50100])
+    print(tknzr.texts_to_sequences(["результат голубые складная оф кругликовской отказались ‐ бесп"]))
+    #nonchars = set()
+    chars    = set(u"абвгдеёзийклмнопрстуфхъыьэжцчшщюяabcdefghijklmnopqrstuwxyz0123456789")
+    if a.use_pretrained:
+        lang_model = ft_load_model('cc.ru.300.bin')
+        words_in_model = set(lang_model.get_words())
+        words_seen = set()
+        words_seen_in_model = set()
+        embedding_matrix = np.zeros((emb_nwords+1, a.emb_text), dtype=np.float32)
+        for word, i in tqdm(list(tknzr.word_index.items())[:emb_nwords]):
+            #nonchars.update(set(word).difference( chars))
+            embedding_vector = lang_model.get_word_vector(word)[:a.emb_text]
+            words_seen.add(word)
+            if word in words_in_model:
+                words_seen_in_model.add(word)
+            if embedding_vector is not None:
+                # words not found in embedding index will be all-zeros.
+                embedding_matrix[i] = embedding_vector
+        #print(nonchars)
+        #print(f'Words seen in corpus: {len(words_seen)} of which {len(words_seen_in_model)} have pretrained vectors ({100. * len(words_seen_in_model)/len(words_seen):.2f}%).')
+    else:
+        embedding_matrix = None
 else:
-    embedding_matrix = None
+    emb_nwords = len(tknzr.word_index)
 
+tr_desc_seq = tknzr.texts_to_sequences(df_x_train[norm_preffix + 'description'].values)
+te_desc_seq = tknzr.texts_to_sequences(   df_test[norm_preffix + 'description'].values)
 
-
-# In[36]:
-
-
-embedding_matrix[1]
-
-
-# In[37]:
-
-
-tr_desc_seq = tknzr.texts_to_sequences(df_x_train['description'].values)
-te_desc_seq = tknzr.texts_to_sequences(df_test['description'].values)
-
-tr_title_seq = tknzr.texts_to_sequences(df_x_train['title'].values)
-te_title_seq = tknzr.texts_to_sequences(df_test['title'].values)
+tr_title_seq = tknzr.texts_to_sequences(df_x_train[norm_preffix + 'title'].values)
+te_title_seq = tknzr.texts_to_sequences(   df_test[norm_preffix + 'title'].values)
 
 tr_desc_pad = pad_sequences(tr_desc_seq, maxlen=a.maxlen_desc)
 te_desc_pad = pad_sequences(te_desc_seq, maxlen=a.maxlen_desc)
@@ -328,9 +328,7 @@ te_desc_pad = pad_sequences(te_desc_seq, maxlen=a.maxlen_desc)
 tr_title_pad = pad_sequences(tr_title_seq, maxlen=a.maxlen_title)
 te_title_pad = pad_sequences(te_title_seq, maxlen=a.maxlen_title)
 
-
 # In[38]:
-
 
 gc.collect()
 
@@ -369,7 +367,7 @@ config.emb_imgt1 = min(max_emb,(config.len_imgt1 + 1)//2)
 config.emb_p1    = min(max_emb,(config.len_p1    + 1)//2)
 config.emb_p2    = min(max_emb,(config.len_p2    + 1)//2)
 config.emb_p3    = min(max_emb,(config.len_p3    + 1)//2)
-config.emb_userid= min(2,(config.len_userid+ 1)//2) # FIX ME--  HACKED!!!!
+config.emb_userid= min(max_emb,(config.len_userid+ 1)//2) 
 
 #continuous
 config.emb_price   = 16
@@ -382,51 +380,6 @@ config.emb_price   = 16
 
 valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
 train_idx = list(df_y_train[np.invert(df_y_train.index.isin(valid_idx))].index)
-
-# In[54]:
-    
-from scipy.special import erfinv 
-
-def rank_gauss(x):
-    # x is numpy vector
-    N = x.shape[0]
-    temp = x.argsort()
-    rank_x = temp.argsort() / N
-    rank_x -= rank_x.mean()
-    rank_x *= 2 # rank_x.max(), rank_x.min() should be in (-1, 1)
-    efi_x = erfinv(rank_x) # np.sqrt(2)*erfinv(rank_x)
-    efi_x -= efi_x.mean()
-    return efi_x
-
-
-# In[69]:
-
-if False:
-    tr_price             = rank_gauss(tr_price)
-    tr_avg_days_up_user  = rank_gauss(tr_avg_days_up_user)
-    tr_avg_times_up_user = rank_gauss(tr_avg_times_up_user)
-    tr_min_days_up_user  = rank_gauss(tr_min_days_up_user)
-    tr_min_times_up_user = rank_gauss(tr_min_times_up_user)
-    tr_max_days_up_user  = rank_gauss(tr_max_days_up_user)
-    tr_max_times_up_user = rank_gauss(tr_max_times_up_user)
-    tr_n_user_items      = rank_gauss(tr_n_user_items)
-
-    te_price             = rank_gauss(te_price)
-    te_avg_days_up_user  = rank_gauss(te_avg_days_up_user)
-    te_avg_times_up_user = rank_gauss(te_avg_times_up_user)
-    te_min_days_up_user  = rank_gauss(te_min_days_up_user)
-    te_min_times_up_user = rank_gauss(te_min_times_up_user)
-    te_max_days_up_user  = rank_gauss(te_max_days_up_user)
-    te_max_times_up_user = rank_gauss(te_max_times_up_user)
-    te_n_user_items      = rank_gauss(te_n_user_items)
-
-#tr_itemseq            = rank_gauss(tr_itemseq)
-#te_itemseq            = rank_gauss(te_itemseq)
-
-# In[73]:
-
-
-# In[74]:
 
 
 [print(k.shape) for k in [tr_reg, tr_pcn, tr_cn, tr_ut, tr_city, tr_week, tr_imgt1, tr_p1, tr_p2, tr_p3, tr_price, tr_itemseq]]
@@ -477,7 +430,7 @@ def root_mean_squared_error(y_true, y_pred):
 if a.use_images:
     CROP_SIZE = 224
     image_feature_extractor = a.image_feature_extractor
-    freeze_until = None# 'res5b_branch2a'
+    freeze_until = a.image_feature_freeze_until# 'res5b_branch2a'
     
     classifier = globals()[image_feature_extractor]
 
@@ -563,9 +516,14 @@ a.batch_size *= gpus
 def get_model():
     do = a.dropout
     bn = not a.no_batchnorm
-    act_pa = { 'activation' : 'relu' }
-    act_fn = Activation
-    
+    a.activation_function = a.activation_function.lower()
+    if a.activation_function == 'prelu':
+        act_pa = { }
+        act_fn = PReLU
+    else:
+        act_pa = { 'activation' : a.activation_function }
+        act_fn = Activation
+
     #K.clear_session()
     inp_reg = Input(shape=(1, ), name='inp_region')
     emb_reg = Embedding(config.len_reg, config.emb_reg, name='emb_region')(inp_reg)
@@ -665,34 +623,23 @@ def get_model():
 
     ### text
 
+
     embedding_text = Embedding(emb_nwords+1, a.emb_text, 
-                               weights = [embedding_matrix], 
-                               trainable=True if a.finetune_pretrained else False,
+                               weights = [embedding_matrix] if not a.char_rnn else None, 
+                               trainable=True if (a.finetune_pretrained or a.char_rnn) else False,
                                name='text_embeddings')
 
     inp_desc = Input(shape=(a.maxlen_desc, ), name='inp_desc')
     emb_desc = embedding_text(inp_desc)
     
-    desc_layer = CuDNNGRU(a.rnn_channels,            return_sequences=True)(emb_desc)
-    desc_layer = CuDNNGRU(a.rnn_channels_bottleneck, return_sequences=False)(desc_layer)
-    if False:
-        desc_layer = Bidirectional(CuDNNGRU(a.rnn_channels, return_sequences=True))(desc_layer)
-        desc_layer = Conv1D(a.rnn_channels_bottleneck, kernel_size = 3, padding = "valid", kernel_initializer = "glorot_uniform")(desc_layer)
-        desc_layer_avg_pool = GlobalAveragePooling1D()(desc_layer)
-        desc_layer_max_pool = GlobalMaxPooling1D()(desc_layer)
-        desc_layer = concatenate([desc_layer_avg_pool, desc_layer_max_pool]) 
-
     inp_title = Input(shape=(a.maxlen_title, ), name='inp_title')
     emb_title = embedding_text(inp_title)
-    
+
+    desc_layer = CuDNNGRU(a.rnn_channels,            return_sequences=True)(emb_desc)
+    desc_layer = CuDNNGRU(a.rnn_channels_bottleneck, return_sequences=False)(desc_layer)
+
     title_layer = CuDNNGRU(a.rnn_channels,            return_sequences=True)(emb_title)
     title_layer = CuDNNGRU(a.rnn_channels_bottleneck, return_sequences=False)(title_layer)
-    if False:
-        title_layer = Bidirectional(CuDNNGRU(a.rnn_channels, return_sequences=True))(title_layer)
-        title_layer = Conv1D(a.rnn_channels_bottleneck, kernel_size = 3, padding = "valid", kernel_initializer = "glorot_uniform")(title_layer)
-        title_layer_avg_pool = GlobalAveragePooling1D()(title_layer)
-        title_layer_max_pool = GlobalMaxPooling1D()(title_layer)
-        title_layer = concatenate([title_layer_avg_pool, title_layer_max_pool]) 
 
     conc_desc = concatenate([x, desc_layer, title_layer], axis=-1)
     
@@ -756,8 +703,9 @@ def gen(idx, valid=False):
     
     print(x.shape, y.shape)
     
-    xd = np.empty((a.batch_size, a.maxlen_desc      ), dtype=np.float32)
-    xt = np.empty((a.batch_size, a.maxlen_title), dtype=np.float32)
+
+    xd = np.empty((a.batch_size, a.maxlen_desc  ), dtype=np.float32)
+    xt = np.empty((a.batch_size, a.maxlen_title ), dtype=np.float32)
     
     batch = 0
     i = 0
