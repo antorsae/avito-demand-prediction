@@ -30,6 +30,7 @@ from keras.layers import GlobalMaxPool1D, GlobalMaxPool2D, GlobalAveragePooling1
 from keras.layers import concatenate, Flatten
 from keras.layers import LSTM, CuDNNGRU, CuDNNLSTM, GRU, Bidirectional, Conv1D
 from keras.models import Model, load_model
+from keras.losses import mean_squared_error
 from keras.applications import *
 import jpeg4py as jpeg
 from keras import backend as K
@@ -37,6 +38,7 @@ from keras import backend as K
 from keras.optimizers import RMSprop, Adam, SGD
 from keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 
+from iterm import show_image
 
 from tensorflow.python.client import device_lib
 import copy
@@ -59,7 +61,9 @@ parser.add_argument('-do', '--dropout', type=float, default=0, help='Dropout rat
 parser.add_argument('-opt', '--opt', action='store_true', help='use OptimizerCallback')
 parser.add_argument('-af', '--activation-function', default='relu', help='Activation function to use (relu|prelu), e.g. -af prelu')
 
-parser.add_argument('-m', '--model', help='load hdf5 model (and continue training)')
+parser.add_argument('-m', '--model',   help='load hdf5 model (and continue training)')
+parser.add_argument('-w', '--weights', help='load hdf5 weights from model (and continue training)')
+
 parser.add_argument('-t', '--test', action='store_true', help='Test model and generate CSV submission file')
 
 parser.add_argument('-up', '--use-pretrained', action='store_true', help='Use pretrained weights')
@@ -71,9 +75,10 @@ parser.add_argument('-fc', '--fully-connected-layers', nargs='+', type=int, defa
 parser.add_argument('-ui', '--use-images', action='store_true', help='Use images')
 parser.add_argument('-ife', '--image-feature-extractor', default='ResNet50', help='Image feature extractor model')
 parser.add_argument('-ifb', '--image-features-bottleneck', type=int, default=16, help='')
+
 parser.add_argument('-iffu', '--image-feature-freeze-until', default=None, help='Freeze image feature extractor layers until layer e.g. -iffu res5b_branch2a')
 
-parser.add_argument('-uut', '--userid-unique-threshold', type=int, default=2, help='Group user_id items whose count is below this threshold (for embedding)')
+parser.add_argument('-uut', '--userid-unique-threshold', type=int, default=16, help='Group user_id items whose count is below this threshold (for embedding)')
 
 parser.add_argument('-char', '--char-rnn', action='store_true', help='User char-based RNN')
 
@@ -81,8 +86,9 @@ parser.add_argument('-mlt', '--maxlen-title', type=int, default=16, help='')
 parser.add_argument('-mld', '--maxlen-desc', type=int, default=256, help='')
 parser.add_argument('-et', '--emb-text', type=int, default=300, help='')
 
-parser.add_argument('-rnnc', '--rnn-channels', type=int, default=None, help='')
-parser.add_argument('-rnncb', '--rnn-channels-bottleneck', type=int, default=None, help='')
+parser.add_argument('-rnnl', '--rnn-layers',              type=int, default=1,    help='Number of RNN (GRU) layers')
+parser.add_argument('-rnnc', '--rnn-channels',            type=int, default=None, help='Number of channels of first RNN layers')
+parser.add_argument('-rnncb','--rnn-channels-bottleneck', type=int, default=None, help='Number of channels of last RNN layer')
 
 a = parser.parse_args()
 
@@ -150,12 +156,10 @@ tr_userid, te_userid, tknzr_userid = to_categorical_idx(
 
 # In[27]:
 
-tr_week = pd.to_datetime(
-    df_x_train['activation_date']).dt.weekday.astype(np.int32).values
-te_week = pd.to_datetime(
-    df_test['activation_date']).dt.weekday.astype(np.int32).values
-tr_week = np.expand_dims(tr_week, axis=-1)
-te_week = np.expand_dims(te_week, axis=-1)
+tr_week = pd.to_datetime(df_x_train['activation_date']).dt.weekday.astype(np.int32).values
+te_week = pd.to_datetime(df_test['activation_date']).dt.weekday.astype(np.int32).values
+#tr_week = np.expand_dims(tr_week, axis=-1)
+#te_week = np.expand_dims(te_week, axis=-1)
 
 
 # In[28]:
@@ -163,39 +167,23 @@ te_week = np.expand_dims(te_week, axis=-1)
 
 tr_imgt1 = df_x_train['image_top_1'].astype(np.int32).values
 te_imgt1 = df_test['image_top_1'].astype(np.int32).values
-tr_imgt1 = np.expand_dims(tr_imgt1, axis=-1)
-te_imgt1 = np.expand_dims(te_imgt1, axis=-1)
+#tr_imgt1 = np.expand_dims(tr_imgt1, axis=-1)
+#te_imgt1 = np.expand_dims(te_imgt1, axis=-1)
 
 
 # In[66]:
 
-if True:
-    tr_price = np.log1p(df_x_train['price'].values)
-    te_price = np.log1p(df_test['price'].values)
-    tr_has_price = 1. - np.isnan(tr_price) * 2.
-    te_has_price = 1. - np.isnan(te_price) * 2.
+tr_price = np.log1p(df_x_train['price'].values)
+te_price = np.log1p(df_test['price'].values)
+tr_has_price = 1. - np.isnan(tr_price) * 2.
+te_has_price = 1. - np.isnan(te_price) * 2.
 
-    tr_price -= np.nanmean(tr_price)
-    te_price -= np.nanmean(te_price)
-    tr_price /= np.nanstd(tr_price)
-    te_price /= np.nanstd(te_price)
-    tr_price[np.isnan(tr_price)] = np.nanmean(tr_price)
-    te_price[np.isnan(te_price)] = np.nanmean(te_price)
-
-else:
-    max_price = df_x_train['price'].max()
-    max_price = max(max_price, df_test['price'].max())
-    tr_price = df_x_train['price']
-    te_price = df_test['price']
-    tr_price[tr_price.isna()] = -max_price
-    te_price[te_price.isna()] = -max_price
-
-# tr_price = np.expand_dims(tr_price, axis=-1)
-# te_price = np.expand_dims(te_price, axis=-1)
-
-
-# In[67]:
-
+tr_price -= np.nanmean(tr_price)
+te_price -= np.nanmean(te_price)
+tr_price /= np.nanstd(tr_price)
+te_price /= np.nanstd(te_price)
+tr_price[np.isnan(tr_price)] = np.nanmean(tr_price)
+te_price[np.isnan(te_price)] = np.nanmean(te_price)
 
 tr_itemseq = np.log1p(df_x_train['item_seq_number'])
 te_itemseq = np.log1p(df_test['item_seq_number'])
@@ -204,18 +192,7 @@ tr_itemseq /= tr_itemseq.std()
 te_itemseq -= te_itemseq.mean()
 te_itemseq /= te_itemseq.std()
 
-
-# price_tr[price_tr.isna()] = -1.
-# price_te[price_te.isna()] = -1.
-
-# tr_itemseq = np.expand_dims(tr_itemseq, axis=-1)
-# te_itemseq = np.expand_dims(te_itemseq, axis=-1)
-
-
-# In[31]:
-
-
-tr_avg_days_up_user = df_x_train['avg_days_up_user']
+tr_avg_days_up_user  = df_x_train['avg_days_up_user']
 tr_avg_days_up_user -= tr_avg_days_up_user.mean()
 tr_avg_days_up_user /= tr_avg_days_up_user.std()
 
@@ -295,7 +272,7 @@ tknzr.fit_on_texts(pd.concat([
     df_test[norm_preffix + 'title'],
     df_test[norm_preffix + 'param_1'],
     df_test[norm_preffix + 'param_2'],
-    df_test[norm_preffix + 'param_3'],
+    df_test[norm_preffix + 'param_3']
 ]).values)
 print("Tokenizing finished")
 
@@ -313,7 +290,7 @@ if not a.char_rnn:
     chars = set(
         u"абвгдеёзийклмнопрстуфхъыьэжцчшщюяabcdefghijklmnopqrstuwxyz0123456789")
     if a.use_pretrained:
-        lang_model = ft_load_model('cc.ru.300.bin')
+        lang_model = ft_load_model(a.fasttext_model)
         words_in_model = set(lang_model.get_words())
         words_seen = set()
         words_seen_in_model = set()
@@ -360,80 +337,66 @@ gc.collect()
 # In[39]:
 
 
-# categorical
-config.len_reg = len(tknzr_reg)
-config.len_pcn = len(tknzr_pcn)
-config.len_cn = len(tknzr_cn)
-config.len_ut = len(tknzr_ut)
-config.len_city = len(tknzr_city)
-config.len_week = 7
-config.len_imgt1 = int(df_x_train['image_top_1'].max()) + 1
-config.len_p1 = len(tknzr_p1)
-config.len_p2 = len(tknzr_p2)
-config.len_p3 = len(tknzr_p3)
-config.len_userid = len(tknzr_userid)
-
-# continuous
-config.len_price = 1
-config.len_itemseq = 1
+## categorical
+config.len_reg   = len(tknzr_reg)
+config.len_pcn   = len(tknzr_pcn)
+config.len_cn    = len(tknzr_cn) 
+config.len_ut    = len(tknzr_ut)
+config.len_city  = len(tknzr_city)
+config.len_week  = 7
+config.len_imgt1 = int(df_x_train['image_top_1'].max())+1
+config.len_p1    = len(tknzr_p1)
+config.len_p2    = len(tknzr_p2)
+config.len_p3    = len(tknzr_p3)
+config.len_userid= len(tknzr_userid)
 
 # In[40]:
 
-# categorical
-max_emb = 64
-config.emb_reg = min(max_emb, (config.len_reg + 1) // 2)
-config.emb_pcn = min(max_emb, (config.len_pcn + 1) // 2)
-config.emb_cn = min(max_emb, (config.len_cn + 1) // 2)
-config.emb_ut = min(max_emb, (config.len_ut + 1) // 2)
-config.emb_city = min(max_emb, (config.len_city + 1) // 2)
-config.emb_week = min(max_emb, (config.len_week + 1) // 2)
-config.emb_imgt1 = min(max_emb, (config.len_imgt1 + 1) // 2)
-config.emb_p1 = min(max_emb, (config.len_p1 + 1) // 2)
-config.emb_p2 = min(max_emb, (config.len_p2 + 1) // 2)
-config.emb_p3 = min(max_emb, (config.len_p3 + 1) // 2)
-config.emb_userid = min(max_emb, (config.len_userid + 1) // 2)
-
-# continuous
-config.emb_price = 16
-
-# text
+## categorical
+config.emb_reg   = min(a.max_emb,(config.len_reg   + 1)//2)
+config.emb_pcn   = min(a.max_emb,(config.len_pcn   + 1)//2)
+config.emb_cn    = min(a.max_emb,(config.len_cn    + 1)//2)
+config.emb_ut    = min(a.max_emb,(config.len_ut    + 1)//2)
+config.emb_city  = min(a.max_emb,(config.len_city  + 1)//2)
+config.emb_week  = min(a.max_emb,(config.len_week  + 1)//2)
+config.emb_imgt1 = min(a.max_emb,(config.len_imgt1 + 1)//2)
+config.emb_p1    = min(a.max_emb,(config.len_p1    + 1)//2)
+config.emb_p2    = min(a.max_emb,(config.len_p2    + 1)//2)
+config.emb_p3    = min(a.max_emb,(config.len_p3    + 1)//2)
+config.emb_userid= min(a.max_emb,(config.len_userid+ 1)//2) 
 
 
 # In[41]:
 
 
 valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
+print(valid_idx[:20])
 train_idx = list(df_y_train[np.invert(df_y_train.index.isin(valid_idx))].index)
 
 
 [print(k.shape)
  for k in [tr_reg, tr_pcn, tr_cn, tr_ut, tr_city, tr_week, tr_imgt1, tr_p1, tr_p2, tr_p3, tr_price, tr_itemseq]]
 
-X = np.array(
-    [tr_reg, tr_pcn, tr_cn, tr_ut.squeeze(
-    ), tr_city, tr_week.squeeze(), tr_imgt1.squeeze(),
-        tr_p1, tr_p2, tr_p3, tr_price.squeeze(
-    ), tr_itemseq.squeeze(),
-                   tr_avg_days_up_user, tr_avg_times_up_user,
-                   tr_min_days_up_user, tr_min_times_up_user,
-                   tr_max_days_up_user, tr_max_times_up_user,
-                   tr_n_user_items, tr_has_price, tr_userid,
-                   df_x_train['image'].values])
+X      = np.array([
+    tr_reg,              tr_pcn,               tr_cn,               tr_ut,      
+    tr_city,             tr_week,              tr_imgt1,            tr_p1, 
+    tr_p2,               tr_p3,                tr_price,            tr_itemseq, 
+    tr_avg_days_up_user, tr_avg_times_up_user, tr_min_days_up_user, tr_min_times_up_user, 
+    tr_max_days_up_user, tr_max_times_up_user, tr_n_user_items,     tr_has_price, 
+    tr_userid,           df_x_train['image'].values])
 
-X_test = np.array(
-    [te_reg, te_pcn, te_cn, te_ut.squeeze(
-    ), te_city, te_week.squeeze(), te_imgt1.squeeze(),
-        te_p1, te_p2, te_p3, te_price.squeeze(
-    ), te_itemseq.squeeze(),
-                   te_avg_days_up_user, te_avg_times_up_user,
-                   te_min_days_up_user, te_min_times_up_user,
-                   te_max_days_up_user, te_max_times_up_user,
-                   te_n_user_items, te_has_price, te_userid,
-                   df_test['image'].values])
+X_test = np.array([
+    te_reg,              te_pcn,               te_cn,               te_ut,      
+    te_city,             te_week,              te_imgt1,            te_p1, 
+    te_p2,               te_p3,                te_price,            te_itemseq, 
+    te_avg_days_up_user, te_avg_times_up_user, te_min_days_up_user, te_min_times_up_user, 
+    te_max_days_up_user, te_max_times_up_user, te_n_user_items,     te_has_price, 
+    te_userid,           df_test['image'].values])
 
 Y = df_y_train['deal_probability'].values
 
-print(X[10])  # price
+print(X[10]) # price
+print(X[-1]) # fname
 
 
 # In[75]:
@@ -458,7 +421,6 @@ def root_mean_squared_error(y_true, y_pred):
 def root_mean_squared_error_for_classification(y_true, y_pred):
     y_pred = K.cast(K.argmax(y_pred), 'float32') / (N_CLASSES - 1.0)
     return K.sqrt(K.mean(K.square(y_pred - y_true), axis=-1))
-
 
 def regression_as_classification_loss(y_true, y_pred):
     # y_true = single float
@@ -676,33 +638,9 @@ def get_model():
 
     x = conc_cont
 
-    if False:
-        x = Dense(512)(x)
-        if bn:
-            x = BatchNormalization()(x)
-        x = act_fn(**act_pa)(x)
-
-        x = Dense(512)(x)
-        if bn:
-            x = BatchNormalization()(x)
-        x = act_fn(**act_pa)(x)
-        if do > 0.:
-            x = Dropout(do)(x)
-
-        x = Dense(512)(x)
-        if bn:
-            x = BatchNormalization()(x)
-        x = act_fn(**act_pa)(x)
-        if do > 0.:
-            x = Dropout(do)(x)
-
-    # text
-
-    embedding_text = Embedding(emb_nwords + 1, a.emb_text,
-                               weights=[
-                                   embedding_matrix] if not a.char_rnn else None,
-                               trainable=True if (
-                                   a.finetune_pretrained or a.char_rnn) else False,
+    embedding_text = Embedding(emb_nwords+1, a.emb_text, 
+                               weights = [embedding_matrix] if not a.char_rnn else None, 
+                               trainable=True if (a.finetune_pretrained or a.char_rnn) else False,
                                name='text_embeddings')
 
     inp_desc = Input(shape=(a.maxlen_desc, ), name='inp_desc')
@@ -711,27 +649,30 @@ def get_model():
     inp_title = Input(shape=(a.maxlen_title, ), name='inp_title')
     emb_title = embedding_text(inp_title)
 
-    desc_layer = CuDNNGRU(
-        a.rnn_channels,            return_sequences=True)(emb_desc)
-    desc_layer = CuDNNGRU(
-        a.rnn_channels_bottleneck, return_sequences=False)(desc_layer)
+    desc_layer = emb_desc
+    for _ in range(a.rnn_layers):
+        desc_layer = CuDNNGRU(a.rnn_channels,        return_sequences=True)(desc_layer)
+    desc_layer = CuDNNGRU(a.rnn_channels_bottleneck, return_sequences=False)(desc_layer)
 
-    title_layer = CuDNNGRU(
-        a.rnn_channels,            return_sequences=True)(emb_title)
-    title_layer = CuDNNGRU(
-        a.rnn_channels_bottleneck, return_sequences=False)(title_layer)
+    title_layer = emb_title
+    for _ in range(a.rnn_layers):
+        title_layer = CuDNNGRU(a.rnn_channels,        return_sequences=True)(title_layer)
+    title_layer = CuDNNGRU(a.rnn_channels_bottleneck, return_sequences=False)(title_layer)
 
     conc_desc = concatenate([x, desc_layer, title_layer], axis=-1)
 
     if a.use_images:
         inp_image = Input(shape=(CROP_SIZE, CROP_SIZE, 3), name='inp_image')
         image_features = classifier_model(inp_image)
-        image_features = Dense(a.image_features_bottleneck)(image_features)
-        if bn:
-            image_features = BatchNormalization()(image_features)
-        image_features = act_fn(**act_pa)(image_features)
-        if do > 0.:
-            image_features = Dropout(do)(image_features)
+        if a.image_features_bottleneck is not None:
+            emb_cats_f = Flatten()(concatenate([emb_pcn,  emb_cn, emb_imgt1], axis=-1))
+            image_features = concatenate([emb_cats_f, image_features], axis=-1)
+            for pow2_channels in reversed(range(int(np.log2(a.image_features_bottleneck))-1, int(np.log2(2048)))):
+                features_bottleneck = 2 ** pow2_channels
+                image_features = Dense(features_bottleneck)(image_features)
+                #if bn: image_features = BatchNormalization()(image_features)
+                image_features = act_fn(**act_pa)(image_features)
+                #if do > 0.: image_features = Dropout(do)(image_features)
         conc_desc = concatenate([conc_desc, image_features], axis=-1)
 
     for fcl in a.fully_connected_layers:
@@ -745,12 +686,12 @@ def get_model():
     outp = Dense(N_CLASSES, activation='softmax', name='output')(conc_desc)
 
     inputs = [
-        inp_reg, inp_pcn, inp_cn, inp_ut, inp_city, inp_week, inp_imgt1, inp_p1, inp_p2, inp_p3,
-              inp_price, inp_itemseq, inp_desc, inp_title,
-              inp_avg_days_up_user, inp_avg_times_up_user,
-              inp_min_days_up_user, inp_min_times_up_user,
-              inp_max_days_up_user, inp_max_times_up_user,
-              inp_n_user_items, inp_has_price, inp_userid,
+        inp_reg,              inp_pcn,               inp_cn,               inp_ut, 
+        inp_city,             inp_week,              inp_imgt1,            inp_p1, 
+        inp_p2,               inp_p3,                inp_price,            inp_itemseq, 
+        inp_desc,             inp_title,             inp_avg_days_up_user, inp_avg_times_up_user, 
+        inp_min_days_up_user, inp_min_times_up_user, inp_max_days_up_user, inp_max_times_up_user, 
+        inp_n_user_items,     inp_has_price,         inp_userid,
     ]
 
     if a.use_images:
@@ -780,22 +721,22 @@ def pad_img_to_fit_bbox(img, x1, x2, y1, y2):
     return img, x1, x2, y1, y2
 
 
-def gen(idx, valid=False):
-
+def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None ):
     if a.use_images:
         load_img_fast_jpg = lambda img_path: jpeg.JPEG(img_path).decode()
         xi = np.empty(
             (a.batch_size, CROP_SIZE, CROP_SIZE, 3), dtype=np.float32)
 
-    x = np.empty((a.batch_size, X.shape[0] - 1), dtype=np.float32)
-    fname_idx = X.shape[0] - (2 if a.use_images else 1)
-    y = np.empty((a.batch_size, ), dtype=np.float32)
-
+    print(X.shape)
+    x = np.zeros((a.batch_size, X.shape[0] -1 ), dtype=np.float32)
+    fname_idx = X.shape[0] - 1 # filename is the last field in X
+    y = np.zeros((a.batch_size, ), dtype=np.float32)
+    
     print(x.shape, y.shape)
-
-    xd = np.empty((a.batch_size, a.maxlen_desc), dtype=np.float32)
-    xt = np.empty((a.batch_size, a.maxlen_title), dtype=np.float32)
-
+    
+    xd = np.zeros((a.batch_size, a.maxlen_desc  ), dtype=np.float32)
+    xt = np.zeros((a.batch_size, a.maxlen_title ), dtype=np.float32)
+    
     batch = 0
     i = 0
     while True:
@@ -804,19 +745,19 @@ def gen(idx, valid=False):
             i = 0
             if True or not valid:
                 random.shuffle(idx)
-
-        x[batch, :fname_idx] = X[:fname_idx, idx[i]]
-        y[batch, ...] = Y[idx[i]]
-
-        n_vect = tr_desc_pad[idx[i]].shape[0]
+        x[batch,:] = X[:fname_idx,idx[i]]
+        if Y is not None:
+            y[batch,...] = Y[idx[i]]
+                
+        n_vect = X_desc_pad[idx[i]].shape[0]
         i_vect = a.maxlen_desc - n_vect
-        xd[batch, i_vect:, ...] = tr_desc_pad[idx[i]]
+        xd[batch, i_vect:, ...] = X_desc_pad[idx[i]]
         xd[batch, :i_vect, ...] = 0
 
-        n_vect = min(tr_title_pad[idx[i]].shape[0], a.maxlen_title)
+        n_vect = min(X_title_pad[idx[i]].shape[0], a.maxlen_title)
         i_vect = a.maxlen_title - n_vect
-
-        xt[batch, i_vect:, ...] = tr_title_pad[idx[i]][:n_vect]
+        
+        xt[batch, i_vect:, ...] = X_title_pad[idx[i]][:n_vect]
         xt[batch, :i_vect, ...] = 0
 
         path = 'data/competition_files/train_jpg/{X[fname_idx,idx[i]]}.jpg'
@@ -829,29 +770,45 @@ def gen(idx, valid=False):
                 max_span = 32
                 rx, ry = np.random.randint(-max_span // 2, max_span // 2, 2)
                 bbox = (
-                    (sx - CROP_SIZE) // 2 + rx, (sy - CROP_SIZE) // 2 + ry,
-                    (sx + CROP_SIZE) // 2 + rx, (sy + CROP_SIZE) // 2 + ry)
+                    (sx - CROP_SIZE )// 2 + rx, (sy - CROP_SIZE )// 2 + ry, 
+                    (sx + CROP_SIZE )// 2 + rx, (sy + CROP_SIZE )// 2 + ry)
+                #show_image(_img)
                 _img = imcrop(_img, bbox)
                 _img = preprocess_image(_img)
                 xi[batch, ...] = _img
             except Exception:
+                #print(path)
                 pass
 
         batch += 1
-        i += 1
-
+        i     += 1
+        
         if batch == a.batch_size:
-            _x = [x[:, 0], x[:, 1], x[:, 2], x[:, 3],
-                  x[:, 4], x[:, 5], x[:, 6], x[:, 7],
-                  x[:, 8], x[:, 9], x[:, 10], x[:, 11],
-                  xd, xt,  x[:, 12], x[:, 13], x[:, 14],
-                  x[:, 15], x[:, 16], x[:, 17], x[:, 18],
-                  x[:, 19], x[:, 20], ]
+            #xx  = np.copy(x)
+            #xxd = np.copy(xd)
+            #xxt = np.copy(xt)
+            assert not np.any(np.isnan(x))
+            assert not np.any(np.isnan(xd))
+            assert not np.any(np.isnan(xt))
+
+            _x = [x[:, 0], x[:, 1], x[:, 2], x[:, 3], 
+                  x[:, 4], x[:, 5], x[:, 6], x[:, 7], 
+                  x[:, 8], x[:, 9], x[:,10], x[:,11],
+                  xd,      xt,      x[:,12], x[:,13], 
+                  x[:,14], x[:,15], x[:,16], x[:,17], 
+                  x[:,18], x[:,19], x[:,20], ]
             if a.use_images:
-                _x.append(xi)
-
-            yield(copy.deepcopy(_x), y)
-
+                #xi = np.copy(xi)
+                _x.append( xi)
+                            
+            if Y is not None:
+                assert not np.any(np.isnan(y))
+                yield(_x, y)
+            else:
+                yield(_x)
+            ##if i == a.batch_size * 4:
+            #    assert False
+            
             batch = 0
 
 
@@ -871,6 +828,9 @@ if a.model:
     assert (m_finetune_pretrained == a.finetune_pretrained)
 else:
     model = get_model()
+    if a.weights:
+        print(f"Loading weights from {a.weights}")
+        model.load_weights(a.weights, by_name=True, skip_mismatch=True)
 model.summary()
 if gpus > 1:
     model = multi_gpu_model(model, gpus=gpus)
@@ -903,21 +863,32 @@ model.compile(
 
 # In[ ]:
 
+print(X.shape)
+
 model.fit_generator(
-    generator=gen(train_idx),
-    steps_per_epoch=len(train_idx) // a.batch_size + 50000*0,
-    validation_data=gen(valid_idx, valid=True),
-    validation_steps=len(valid_idx) // a.batch_size + 50000*0,
-    epochs=a.max_epoch,
-    callbacks=callbacks,
+    generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y),
+    steps_per_epoch  = len(train_idx) // a.batch_size, 
+    validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y), 
+    validation_steps = len(valid_idx) // a.batch_size, 
+    epochs = a.max_epoch, 
+    callbacks=[checkpoint, early, reduce_lr], 
     verbose=1)
 
 
 # In[ ]:
+n_test   = X_test.shape[1]
+test_idx = list(range(n_test)) #508438
+print(test_idx[:20])
+a.batch_size = 3158 # 1, 2, 7, 14, 23, 46, 161, 322, 1579, 3158
+assert (a.batch_size % gpus)   == 0
+assert (n_test % a.batch_size) == 0
+pred = model.predict_generator(
+    generator        = gen(test_idx, valid=False, X=X_test, X_desc_pad=te_desc_pad, X_title_pad=te_title_pad, Y=None),
+    steps            = n_test // a.batch_size ,
+    verbose=1)
 
-
-pred = model.predict(X_test)
-
-subm = pd.read_csv('sample_submission.csv')
+subm = pd.read_csv(f'{PATH}/sample_submission.csv')
+assert np.all(subm['item_id'] == df_test['item_id']) # order right?
 subm['deal_probability'] = pred
-subm.to_csv('submit_{}_{:.4f}.csv'.format('nn_p3', 0.2226), index=False)
+subm.to_csv('submit.csv', index=False)
+
