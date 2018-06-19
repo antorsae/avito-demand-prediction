@@ -752,7 +752,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None ):
 
         if i == len(idx):
             i = 0
-            if True or not valid:
+            if not valid and (Y is not None):
                 random.shuffle(idx)
         x[batch,:] = X[:fname_idx,idx[i]]
         if Y is not None:
@@ -884,20 +884,25 @@ model.fit_generator(
     verbose=1)
 
 
-# In[ ]:
-n_test   = X_test.shape[1]
+#BS -> 3158 # 1, 2, 7, 14, 23, 46, 161, 322, 1579, 3158 for test
+# 4448 for train 
+
+#XX, XX_desc_pad, XX_title_pad, csv , bs = X_test, te_desc_pad, te_title_pad, f'{PATH}/sample_submission.csv', 3158, df_test
+XX, XX_desc_pad, XX_title_pad, csv , bs, df = X, tr_desc_pad, tr_title_pad, 'train.csv', 4448, df_x_train
+
+n_test   = XX.shape[1]
 test_idx = list(range(n_test)) #508438
 print(test_idx[:20])
-a.batch_size = 3158 # 1, 2, 7, 14, 23, 46, 161, 322, 1579, 3158
+a.batch_size = bs 
 assert (a.batch_size % gpus)   == 0
 assert (n_test % a.batch_size) == 0
 pred = model.predict_generator(
-    generator        = gen(test_idx, valid=False, X=X_test, X_desc_pad=te_desc_pad, X_title_pad=te_title_pad, Y=None),
+    generator        = gen(test_idx, valid=False, X=XX, X_desc_pad=XX_desc_pad, X_title_pad=XX_title_pad, Y=None),
     steps            = n_test // a.batch_size ,
     verbose=1)
 
-subm = pd.read_csv('sample_submission.csv')
-assert np.all(subm['item_id'] == df_test['item_id']) # order right?
+subm = pd.read_csv(csv)
+assert np.all(subm['item_id'] == df['item_id']) # order right?
 subm['deal_probability'] = pred
 subm.to_csv('submit.csv', index=False)
 
