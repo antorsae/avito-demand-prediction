@@ -806,7 +806,7 @@ model.fit_generator(
 #BS -> #508438 => Factors => 3158 # 1, 2, 7, 14, 23, 46, 161, 322, 1579, 3158 for test
 #                            4448 for train 
 
-XX, XX_desc_pad, XX_title_pad, csv , bs = X_test, te_desc_pad, te_title_pad, f'{PATH}/sample_submission.csv', gpus*3158//2, df_test
+XX, XX_desc_pad, XX_title_pad, csv , bs, df = X_test, te_desc_pad, te_title_pad, f'{PATH}/sample_submission.csv', gpus*3158//2, df_test
 #XX, XX_desc_pad, XX_title_pad, csv , bs, df = X, tr_desc_pad, tr_title_pad, f'{PATH}/train.csv', gpus*4448//2, df_x_train
 
 n_test   = XX.shape[1]
