@@ -100,7 +100,7 @@ df_test    = pd.read_feather('df_test')
 
 #create config init
 config = argparse.Namespace()
-N_CLASSES = 100
+N_CLASSES = 256
 
 # In[25]:
 
@@ -424,18 +424,18 @@ def root_mean_squared_error(y_true, y_pred):
     return K.sqrt(K.mean(K.square(y_pred - y_true))) 
 
 def root_mean_squared_error_for_classification(y_true, y_pred):
-    y_pred = K.cast(K.argmax(y_pred) / N_CLASSES, 'float32')
+    y_pred = K.cast(K.argmax(y_pred), 'float32') / (N_CLASSES-1.0)
     return K.sqrt(K.mean(K.square(y_pred - y_true)))
 
 def regression_as_classification_loss(y_true, y_pred):
     #y_true = single float
     #y_pred = softmax layer
 
-    dist_map = K.constant(np.array(np.arange(N_CLASSES) / (N_CLASSES * 1.0), dtype=np.float32))
+    dist_map = K.constant(np.array(np.arange(N_CLASSES), dtype=np.float32))
 
-    distance = K.abs(y_true-dist_map)
-    distance = K.cast(distance, 'float32')
-    loss = K.mean(-K.sum(K.log(y_pred + K.constant(1e-10)) * K.exp(-distance / 3.0)))
+    distance = K.abs(y_true*(N_CLASSES-1.0)-dist_map)
+    #distance = K.cast(distance, 'float32')
+    loss = K.mean(-K.sum(K.log(y_pred + K.constant(1e-10)) * K.exp(-distance / 3.0), 0))
     return loss
 
 # In[46]:
