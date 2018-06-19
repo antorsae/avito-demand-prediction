@@ -103,7 +103,7 @@ if args.gpus is None:
 
 args.batch_size *= max(args.gpus, 1)
 
-CROP_SIZE = 256
+CROP_SIZE = 224
 # data
 N_CLASSES = 3067
 MODEL_FOLDER = 'models'
@@ -116,7 +116,7 @@ LABELS = dict()
 for line in open('image_top_1.csv').read().splitlines():
     TRAIN_DATA.append(line.split(',')[0])
     TRAIN_LABELS.append(int(line.split(',')[1]))
-    LABELS[line.split(',')[0]] = line.split(',')[1]
+    LABELS[line.split(',')[0]] = int(line.split(',')[1])
 
 print(len(TRAIN_DATA), len(TRAIN_LABELS))
 
