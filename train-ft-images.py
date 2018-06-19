@@ -66,13 +66,19 @@ parser.add_argument('-w', '--weights', help='load hdf5 weights from model (and c
 
 parser.add_argument('-t', '--test', action='store_true', help='Test model and generate CSV submission file')
 
-parser.add_argument('-up', '--use-pretrained', action='store_true', help='Use pretrained weights')
-parser.add_argument('-fp', '--finetune-pretrained', action='store_true', help='Finetune pretrained weights')
-parser.add_argument('-fw', '--ft-words', type=int, default=50000, help='Number of most frequent words (tokens) to finetune')
+parser.add_argument('-up',  '--use-pretrained',      action='store_true', help='Use pretrained weights')
+parser.add_argument('-fp',  '--finetune-pretrained', action='store_true', help='Finetune pretrained weights')
+parser.add_argument('-fw',  '--ft-words',            type=int, default=50000, help='Number of most frequent words (tokens) to finetune')
+parser.add_argument('-ftm', '--fasttext-model',      default='avito.ru.300.bin', help='FastText model (for pretrained text embeddings)')
+
+#parser.add_argument('-fc', '--fully-connected-layers', nargs='+', type=int, default=[512], help='Specify last FC layers, e.g. -fc 1024 512 256')
+
+parser.add_argument('-me',  '--max-emb', type=int, default=64, help='Maximum size of embedding vectors for categorical features')
+
+parser.add_argument('-ui',   '--use-images', action='store_true', help='Use images')
 
 parser.add_argument('-fc', '--fully-connected-layers', nargs='+', type=int, default=[2048, 1024, 512, 256], help='Specify last FC layers, e.g. -fc 1024 512 256')
 
-parser.add_argument('-ui', '--use-images', action='store_true', help='Use images')
 parser.add_argument('-ife', '--image-feature-extractor', default='ResNet50', help='Image feature extractor model')
 parser.add_argument('-ifb', '--image-features-bottleneck', type=int, default=16, help='')
 
@@ -179,9 +185,9 @@ tr_has_price = 1. - np.isnan(tr_price) * 2.
 te_has_price = 1. - np.isnan(te_price) * 2.
 
 tr_price -= np.nanmean(tr_price)
-te_price -= np.nanmean(te_price)
+te_price -= np.nanmean(tr_price)
 tr_price /= np.nanstd(tr_price)
-te_price /= np.nanstd(te_price)
+te_price /= np.nanstd(tr_price)
 tr_price[np.isnan(tr_price)] = np.nanmean(tr_price)
 te_price[np.isnan(te_price)] = np.nanmean(te_price)
 
@@ -189,8 +195,8 @@ tr_itemseq = np.log1p(df_x_train['item_seq_number'])
 te_itemseq = np.log1p(df_test['item_seq_number'])
 tr_itemseq -= tr_itemseq.mean()
 tr_itemseq /= tr_itemseq.std()
-te_itemseq -= te_itemseq.mean()
-te_itemseq /= te_itemseq.std()
+te_itemseq -= tr_itemseq.mean()
+te_itemseq /= tr_itemseq.std()
 
 tr_avg_days_up_user  = df_x_train['avg_days_up_user']
 tr_avg_days_up_user -= tr_avg_days_up_user.mean()
@@ -221,32 +227,32 @@ tr_n_user_items -= tr_n_user_items.mean()
 tr_n_user_items /= tr_n_user_items.std()
 
 te_avg_days_up_user = df_test['avg_days_up_user']
-te_avg_days_up_user -= te_avg_days_up_user.mean()
-te_avg_days_up_user /= te_avg_days_up_user.std()
+te_avg_days_up_user -= tr_avg_days_up_user.mean()
+te_avg_days_up_user /= tr_avg_days_up_user.std()
 
 te_avg_times_up_user = df_test['avg_times_up_user']
-te_avg_times_up_user -= te_avg_times_up_user.mean()
-te_avg_times_up_user /= te_avg_times_up_user.std()
+te_avg_times_up_user -= tr_avg_times_up_user.mean()
+te_avg_times_up_user /= tr_avg_times_up_user.std()
 
 te_min_days_up_user = df_test['min_days_up_user']
-te_min_days_up_user -= te_min_days_up_user.mean()
-te_min_days_up_user /= te_min_days_up_user.std()
+te_min_days_up_user -= tr_min_days_up_user.mean()
+te_min_days_up_user /= tr_min_days_up_user.std()
 
 te_min_times_up_user = df_test['min_times_up_user']
-te_min_times_up_user -= te_min_times_up_user.mean()
-te_min_times_up_user /= te_min_times_up_user.std()
+te_min_times_up_user -= tr_min_times_up_user.mean()
+te_min_times_up_user /= tr_min_times_up_user.std()
 
 te_max_days_up_user = df_test['max_days_up_user']
-te_max_days_up_user -= te_max_days_up_user.mean()
-te_max_days_up_user /= te_max_days_up_user.std()
+te_max_days_up_user -= tr_max_days_up_user.mean()
+te_max_days_up_user /= tr_max_days_up_user.std()
 
 te_max_times_up_user = df_test['max_times_up_user']
-te_max_times_up_user -= te_max_times_up_user.mean()
-te_max_times_up_user /= te_max_times_up_user.std()
+te_max_times_up_user -= tr_max_times_up_user.mean()
+te_max_times_up_user /= tr_max_times_up_user.std()
 
 te_n_user_items = df_test['n_user_items']
-te_n_user_items -= te_n_user_items.mean()
-te_n_user_items /= te_n_user_items.std()
+te_n_user_items -= tr_n_user_items.mean()
+te_n_user_items /= tr_n_user_items.std()
 
 # In[34]:
 
@@ -417,6 +423,9 @@ gc.collect()
 def root_mean_squared_error(y_true, y_pred):
     return K.sqrt(K.mean(K.square(y_pred - y_true), axis=-1))
 
+def rmse_old(y_true, y_pred):
+    y_pred = K.cast(K.argmax(y_pred), 'float32') / (N_CLASSES - 1.0)
+    return K.sqrt(K.mean(K.square(y_pred - y_true)))
 
 def root_mean_squared_error_for_classification(y_true, y_pred):
     y_pred = K.cast(K.argmax(y_pred), 'float32') / (N_CLASSES - 1.0)
@@ -829,7 +838,7 @@ if a.model:
 else:
     model = get_model()
     if a.weights:
-        print(f"Loading weights from {a.weights}")
+        print("Loading weights from %s" % a.weights)
         model.load_weights(a.weights, by_name=True, skip_mismatch=True)
 model.summary()
 if gpus > 1:
@@ -859,7 +868,7 @@ if a.opt:
 model.compile(
     optimizer=SGD(lr=a.learning_rate) if True or a.use_images else RMSprop(
         lr=a.learning_rate),
-              loss=regression_as_classification_loss, metrics=[regression_as_classification_loss, root_mean_squared_error_for_classification])
+              loss=regression_as_classification_loss, metrics=[regression_as_classification_loss, root_mean_squared_error_for_classification, rmse_old])
 
 # In[ ]:
 
@@ -887,7 +896,7 @@ pred = model.predict_generator(
     steps            = n_test // a.batch_size ,
     verbose=1)
 
-subm = pd.read_csv(f'{PATH}/sample_submission.csv')
+subm = pd.read_csv('sample_submission.csv')
 assert np.all(subm['item_id'] == df_test['item_id']) # order right?
 subm['deal_probability'] = pred
 subm.to_csv('submit.csv', index=False)
