@@ -42,11 +42,13 @@ from iterm import show_image
 
 from tensorflow.python.client import device_lib
 import copy
+from quantum_gravity_callback import QuantumGravityCallback
 
 def get_available_gpus():
     local_device_protos = device_lib.list_local_devices()
     return [x.name for x in local_device_protos if x.device_type == 'GPU']
 
+import pickle
 gpus = len(get_available_gpus())
 
 PATH = '.'
@@ -118,7 +120,7 @@ df_test = pd.read_feather('df_test')
 
 # create config init
 config = argparse.Namespace()
-N_CLASSES = 101
+N_CLASSES = 1
 
 # In[25]:
 
@@ -147,6 +149,7 @@ tr_pcn, te_pcn, tknzr_pcn = to_categorical_idx(
     'parent_category_name', df_x_train, df_test)
 tr_cn, te_cn, tknzr_cn = to_categorical_idx(
     'category_name', df_x_train, df_test)
+pickle.dump(tknzr_cn, open('category_name.pkl', 'wb'))
 tr_ut, te_ut, tknzr_ut = to_categorical_idx(
     'user_type', df_x_train, df_test)
 tr_city, te_city, tknzr_city = to_categorical_idx('city', df_x_train, df_test)
@@ -421,9 +424,9 @@ gc.collect()
 
 # rmse loss for keras
 def root_mean_squared_error(y_true, y_pred):
-    return K.sqrt(K.mean(K.square(y_pred - y_true), axis=-1))
-def root_mean_squared_error_old(y_true, y_pred):
     return K.sqrt(K.mean(K.square(y_pred - y_true), axis=None)) #return K.sqrt(mean_squared_error(y_true, y_pred))
+
+from keras.losses import mean_squared_error
 
 def rmse_old(y_true, y_pred):
     y_pred = K.cast(K.argmax(y_pred, axis=1), 'float32') / (N_CLASSES - 1.0)
@@ -696,7 +699,7 @@ def get_model():
 
     #outp = Dense(N_CLASSES, activation='tanh', name='output')(conc_desc)
     #outp = Activation('relu')(outp)
-    outp = Dense(N_CLASSES, activation='softmax', name='output')(conc_desc)
+    outp = Dense(N_CLASSES, activation='sigmoid', name='output')(conc_desc)
 
     inputs = [
         inp_reg,              inp_pcn,               inp_cn,               inp_ut, 
@@ -868,14 +871,19 @@ callbacks = [checkpoint, early, reduce_lr]
 if a.opt:
     callbacks.append(OptimizerCallback())
 
+callbacks.append(QuantumGravityCallback())
 # In[82]:
 
+
+#model.compile(
+#    optimizer=SGD(lr=a.learning_rate) if True or a.use_images else RMSprop(
+#        lr=a.learning_rate),
+#              loss=r_as_c_loss, metrics=[r_as_c_loss, rmse, rmse_old])
 
 model.compile(
     optimizer=SGD(lr=a.learning_rate) if True or a.use_images else RMSprop(
         lr=a.learning_rate),
-              loss=r_as_c_loss, metrics=[r_as_c_loss, rmse, rmse_old])
-
+              loss=root_mean_squared_error, metrics=[root_mean_squared_error])
 # In[ ]:
 
 print(X.shape)
@@ -887,7 +895,7 @@ if True:
         validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y), 
         validation_steps = len(valid_idx) // a.batch_size, 
         epochs = a.max_epoch, 
-        callbacks=[checkpoint, early, reduce_lr], 
+        callbacks=callbacks, 
         verbose=1)
 
 
