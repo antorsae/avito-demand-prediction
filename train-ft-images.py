@@ -73,7 +73,7 @@ parser.add_argument('-me',  '--max-emb', type=int, default=64, help='Maximum siz
 parser.add_argument('-ui',   '--use-images', action='store_true', help='Use images')
 parser.add_argument('-ife',  '--image-feature-extractor', default='ResNet50', help='Image feature extractor model')
 parser.add_argument('-ifb',  '--image-features-bottleneck', type=int, default=None, help='')
-parser.add_argument('-iffu', '--image-feature-freeze-until', default=None, help='Freeze image feature extractor layers until layer e.g. -iffu res5b_branch2a')
+parser.add_argument('-iffu', '--image-feature-freeze-until', default=None, help='Freeze image feature extractor layers until layer e.g. -iffu ')
 
 parser.add_argument('-uut', '--userid-unique-threshold', type=int, default=16, help='Group user_id items whose count is below this threshold (for embedding)')
 
@@ -164,75 +164,41 @@ te_price = np.log1p(df_test['price'].values)
 tr_has_price = 1. - np.isnan(tr_price) * 2.
 te_has_price = 1. - np.isnan(te_price) * 2.
 
-tr_price -= np.nanmean(tr_price)
-te_price -= np.nanmean(te_price)
-tr_price /= np.nanstd(tr_price)
-te_price /= np.nanstd(te_price)
-tr_price[np.isnan(tr_price)] = np.nanmean(tr_price)
-te_price[np.isnan(te_price)] = np.nanmean(te_price)
+t_price = np.concatenate((tr_price, te_price))
+t_price_mean = np.nanmean(t_price)
+t_price_std  = np.nanstd(t_price)
 
-tr_itemseq = np.log1p(df_x_train['item_seq_number'])
-te_itemseq = np.log1p(df_test['item_seq_number'])
-tr_itemseq -= tr_itemseq.mean()
-tr_itemseq /= tr_itemseq.std()
-te_itemseq -= te_itemseq.mean()
-te_itemseq /= te_itemseq.std()
+tr_price -= t_price_mean
+te_price -= t_price_mean
+tr_price /= t_price_std
+te_price /= t_price_std
+t_price = np.concatenate((tr_price, te_price))
+t_price_mean = np.nanmean(t_price)
+tr_price[np.isnan(tr_price)] = t_price_mean
+te_price[np.isnan(te_price)] = t_price_mean
 
-tr_avg_days_up_user  = df_x_train['avg_days_up_user']
-tr_avg_days_up_user -= tr_avg_days_up_user.mean()
-tr_avg_days_up_user /= tr_avg_days_up_user.std()
+def normalize_mean_std(df_tr, df_te, column, pre_fn=None):
+    tr, te = df_tr[column].values.astype(np.float), df_te[column].values.astype(np.float)
+    if pre_fn is not None:
+        tr, te = pre_fn(tr), pre_fn(te)
+    t = np.concatenate((tr, te))
+    t_mean, t_std = np.mean(t), np.std(t)
+    tr -= t_mean
+    te -= t_mean
+    tr /= t_std
+    te /= t_std
+    return tr,te
 
-tr_avg_times_up_user = df_x_train['avg_times_up_user']
-tr_avg_times_up_user -= tr_avg_times_up_user.mean()
-tr_avg_times_up_user /= tr_avg_times_up_user.std()
+tr_itemseq,           te_itemseq           = normalize_mean_std(df_x_train, df_test, 'item_seq_number', np.log1p)
 
-tr_min_days_up_user  = df_x_train['min_days_up_user']
-tr_min_days_up_user -= tr_min_days_up_user.mean()
-tr_min_days_up_user /= tr_min_days_up_user.std()
+tr_avg_days_up_user,  te_avg_days_up_user  = normalize_mean_std(df_x_train, df_test, 'avg_days_up_user')
+tr_avg_times_up_user, te_avg_times_up_user = normalize_mean_std(df_x_train, df_test, 'avg_times_up_user')
+tr_min_days_up_user,  te_min_days_up_user  = normalize_mean_std(df_x_train, df_test, 'min_days_up_user')
+tr_min_times_up_user, te_min_times_up_user = normalize_mean_std(df_x_train, df_test, 'min_times_up_user')
+tr_max_days_up_user,  te_max_days_up_user  = normalize_mean_std(df_x_train, df_test, 'max_days_up_user')
+tr_max_times_up_user, te_max_times_up_user = normalize_mean_std(df_x_train, df_test, 'max_times_up_user')
 
-tr_min_times_up_user = df_x_train['min_times_up_user']
-tr_min_times_up_user -= tr_min_times_up_user.mean()
-tr_min_times_up_user /= tr_min_times_up_user.std()
-
-tr_max_days_up_user  = df_x_train['max_days_up_user']
-tr_max_days_up_user -= tr_max_days_up_user.mean()
-tr_max_days_up_user /= tr_max_days_up_user.std()
-
-tr_max_times_up_user = df_x_train['max_times_up_user']
-tr_max_times_up_user -= tr_max_times_up_user.mean()
-tr_max_times_up_user /= tr_max_times_up_user.std()
-
-tr_n_user_items  = df_x_train['n_user_items']
-tr_n_user_items -= tr_n_user_items.mean()
-tr_n_user_items /= tr_n_user_items.std()
-
-te_avg_days_up_user  = df_test['avg_days_up_user']
-te_avg_days_up_user -= te_avg_days_up_user.mean()
-te_avg_days_up_user /= te_avg_days_up_user.std()
-
-te_avg_times_up_user  = df_test['avg_times_up_user']
-te_avg_times_up_user -= te_avg_times_up_user.mean()
-te_avg_times_up_user /= te_avg_times_up_user.std()
-
-te_min_days_up_user  = df_test['min_days_up_user']
-te_min_days_up_user -= te_min_days_up_user.mean()
-te_min_days_up_user /= te_min_days_up_user.std()
-
-te_min_times_up_user  = df_test['min_times_up_user']
-te_min_times_up_user -= te_min_times_up_user.mean()
-te_min_times_up_user /= te_min_times_up_user.std()
-
-te_max_days_up_user  = df_test['max_days_up_user']
-te_max_days_up_user -= te_max_days_up_user.mean()
-te_max_days_up_user /= te_max_days_up_user.std()
-
-te_max_times_up_user = df_test['max_times_up_user']
-te_max_times_up_user -= te_max_times_up_user.mean()
-te_max_times_up_user /= te_max_times_up_user.std()
-
-te_n_user_items  = df_test['n_user_items']
-te_n_user_items -= te_n_user_items.mean()
-te_n_user_items /= te_n_user_items.std()
+tr_n_user_items,      te_n_user_items      = normalize_mean_std(df_x_train, df_test, 'n_user_items')
 
 # In[34]:
 
@@ -787,7 +753,7 @@ reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr
 
 
 model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
-              loss = root_mean_squared_error, metrics=[root_mean_squared_error])
+              loss = 'mse' , metrics=[root_mean_squared_error])
 
 # In[ ]:
 
@@ -824,7 +790,7 @@ subm = pd.read_csv(csv)
 assert np.all(subm['item_id'] == df['item_id']) # order right?
 df['deal_probability_ref'] = subm['deal_probability']
 subm['deal_probability'] = pred
-subm.to_csv('submit.csv', index=False)
+subm.to_csv('submit-mse.csv', index=False)
 
 diff=(subm['deal_probability']-df['deal_probability_ref']).values
 rmse = np.sqrt(np.mean(diff**2))
