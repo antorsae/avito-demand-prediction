@@ -71,13 +71,13 @@ parser.add_argument('-fp',  '--finetune-pretrained', action='store_true', help='
 parser.add_argument('-fw',  '--ft-words',            type=int, default=50000, help='Number of most frequent words (tokens) to finetune')
 parser.add_argument('-ftm', '--fasttext-model',      default='avito.ru.300.bin', help='FastText model (for pretrained text embeddings)')
 
-#parser.add_argument('-fc', '--fully-connected-layers', nargs='+', type=int, default=[512], help='Specify last FC layers, e.g. -fc 1024 512 256')
+parser.add_argument('-fc', '--fully-connected-layers', nargs='+', type=int, default=[512], help='Specify last FC layers, e.g. -fc 1024 512 256')
 
 parser.add_argument('-me',  '--max-emb', type=int, default=64, help='Maximum size of embedding vectors for categorical features')
 
 parser.add_argument('-ui',   '--use-images', action='store_true', help='Use images')
 
-parser.add_argument('-fc', '--fully-connected-layers', nargs='+', type=int, default=[2048, 1024, 512, 256], help='Specify last FC layers, e.g. -fc 1024 512 256')
+#parser.add_argument('-fc', '--fully-connected-layers', nargs='+', type=int, default=[2048, 1024, 512, 256], help='Specify last FC layers, e.g. -fc 1024 512 256')
 
 parser.add_argument('-ife', '--image-feature-extractor', default='ResNet50', help='Image feature extractor model')
 parser.add_argument('-ifb', '--image-features-bottleneck', type=int, default=16, help='')
@@ -118,7 +118,7 @@ df_test = pd.read_feather('df_test')
 
 # create config init
 config = argparse.Namespace()
-N_CLASSES = 100
+N_CLASSES = 101
 
 # In[25]:
 
@@ -422,16 +422,19 @@ gc.collect()
 # rmse loss for keras
 def root_mean_squared_error(y_true, y_pred):
     return K.sqrt(K.mean(K.square(y_pred - y_true), axis=-1))
-
-def rmse_old(y_true, y_pred):
-    y_pred = K.cast(K.argmax(y_pred), 'float32') / (N_CLASSES - 1.0)
+def root_mean_squared_error_old(y_true, y_pred):
     return K.sqrt(K.mean(K.square(y_pred - y_true)))
 
-def root_mean_squared_error_for_classification(y_true, y_pred):
-    y_pred = K.cast(K.argmax(y_pred), 'float32') / (N_CLASSES - 1.0)
+def rmse_old(y_true, y_pred):
+    y_pred = K.cast(K.argmax(y_pred, axis=1), 'float32') / (N_CLASSES - 1.0)
+    return K.sqrt(K.mean(K.square(y_pred - y_true)))
+
+def rmse(y_true, y_pred):
+    print(y_true.get_shape, y_pred.get_shape)
+    y_pred = K.cast(K.argmax(y_pred, axis=1), 'float32') / (N_CLASSES - 1.0)
     return K.sqrt(K.mean(K.square(y_pred - y_true), axis=-1))
 
-def regression_as_classification_loss(y_true, y_pred):
+def r_as_c_loss(y_true, y_pred):
     # y_true = single float
     # y_pred = softmax layer
     tf = K.tf
@@ -440,7 +443,7 @@ def regression_as_classification_loss(y_true, y_pred):
 
     stack = tf.convert_to_tensor(stack, dtype=tf.int32)
     distance = tf.abs(
-        stack - tf.reshape(tf.cast(y_true * tf.convert_to_tensor((N_CLASSES - 1), dtype=tf.float32), tf.int32), [-1, 1]))
+        stack - tf.reshape(tf.cast(y_true * tf.convert_to_tensor((N_CLASSES - 1), dtype=tf.float32), tf.int32), [a.batch_size, 1]))
 
     distance = tf.cast(distance, dtype=tf.float32)
     p1 = tf.log(y_pred + tf.convert_to_tensor(tf.constant(1e-10), dtype=tf.float32))
@@ -692,6 +695,8 @@ def get_model():
         if do > 0.:
             conc_desc = Dropout(do)(conc_desc)
 
+    #outp = Dense(N_CLASSES, activation='tanh', name='output')(conc_desc)
+    #outp = Activation('relu')(outp)
     outp = Dense(N_CLASSES, activation='softmax', name='output')(conc_desc)
 
     inputs = [
@@ -739,7 +744,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None ):
     print(X.shape)
     x = np.zeros((a.batch_size, X.shape[0] -1 ), dtype=np.float32)
     fname_idx = X.shape[0] - 1 # filename is the last field in X
-    y = np.zeros((a.batch_size, ), dtype=np.float32)
+    y = np.zeros((a.batch_size, 1), dtype=np.float32)
     
     print(x.shape, y.shape)
     
@@ -868,20 +873,21 @@ if a.opt:
 model.compile(
     optimizer=SGD(lr=a.learning_rate) if True or a.use_images else RMSprop(
         lr=a.learning_rate),
-              loss=regression_as_classification_loss, metrics=[regression_as_classification_loss, root_mean_squared_error_for_classification, rmse_old])
+              loss=r_as_c_loss, metrics=[r_as_c_loss, rmse, rmse_old])
 
 # In[ ]:
 
 print(X.shape)
 
-model.fit_generator(
-    generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y),
-    steps_per_epoch  = len(train_idx) // a.batch_size, 
-    validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y), 
-    validation_steps = len(valid_idx) // a.batch_size, 
-    epochs = a.max_epoch, 
-    callbacks=[checkpoint, early, reduce_lr], 
-    verbose=1)
+if True:
+    model.fit_generator(
+        generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y),
+        steps_per_epoch  = len(train_idx) // a.batch_size, 
+        validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y), 
+        validation_steps = len(valid_idx) // a.batch_size, 
+        epochs = a.max_epoch, 
+        callbacks=[checkpoint, early, reduce_lr], 
+        verbose=1)
 
 
 #BS -> 3158 # 1, 2, 7, 14, 23, 46, 161, 322, 1579, 3158 for test
@@ -891,9 +897,13 @@ model.fit_generator(
 XX, XX_desc_pad, XX_title_pad, csv , bs, df = X, tr_desc_pad, tr_title_pad, 'train.csv', 4448, df_x_train
 
 n_test   = XX.shape[1]
+if a.batch_size == 1:
+    n_test = 1000
 test_idx = list(range(n_test)) #508438
 print(test_idx[:20])
-a.batch_size = bs 
+if a.batch_size != 1:
+    a.batch_size = bs 
+
 assert (a.batch_size % gpus)   == 0
 assert (n_test % a.batch_size) == 0
 pred = model.predict_generator(
@@ -901,8 +911,11 @@ pred = model.predict_generator(
     steps            = n_test // a.batch_size ,
     verbose=1)
 
-subm = pd.read_csv(csv)
-assert np.all(subm['item_id'] == df['item_id']) # order right?
+print(pred)
+print(pred.shape)
+subm = pd.read_csv(csv, nrows=n_test)
+#assert np.all(subm['item_id'] == df['item_id']) # order right?
+#subm['deal_probability'] = np.argmax(pred, axis=1) / (N_CLASSES-1.0)
 subm['deal_probability'] = pred
 subm.to_csv('submit.csv', index=False)
 
