@@ -79,8 +79,8 @@ class QuantumGravityCallback(Callback):
                     else:
                         new_y[i] = peaks[idx]
 
-            #outs = self.model.test_on_batch(x, new_y, sample_weight=None)
-            outs = self.model.test_on_batch(x, y, sample_weight=None)
+            outs = self.model.test_on_batch(x, new_y, sample_weight=None)
+            #outs = self.model.test_on_batch(x, y, sample_weight=None)
             if not isinstance(outs, list):
                 outs = [outs]
             outs_per_batch.append(outs)
