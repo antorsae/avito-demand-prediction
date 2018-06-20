@@ -423,11 +423,11 @@ gc.collect()
 def root_mean_squared_error(y_true, y_pred):
     return K.sqrt(K.mean(K.square(y_pred - y_true), axis=-1))
 def root_mean_squared_error_old(y_true, y_pred):
-    return K.sqrt(K.mean(K.square(y_pred - y_true)))
+    return K.sqrt(K.mean(K.square(y_pred - y_true), axis=None)) #return K.sqrt(mean_squared_error(y_true, y_pred))
 
 def rmse_old(y_true, y_pred):
     y_pred = K.cast(K.argmax(y_pred, axis=1), 'float32') / (N_CLASSES - 1.0)
-    return K.sqrt(K.mean(K.square(y_pred - y_true)))
+    return K.sqrt(K.mean(K.square(y_pred - y_true), axis=None))
 
 def rmse(y_true, y_pred):
     print(y_true.get_shape, y_pred.get_shape)
@@ -537,7 +537,6 @@ if a.use_images:
         preprocess_input_function = getattr(
             globals()[classifier_module_name], 'preprocess_input')
         return preprocess_input_function(img.astype(np.float32))
-
 
 # In[47]:
 
@@ -798,26 +797,28 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None ):
         i     += 1
         
         if batch == a.batch_size:
-            #xx  = np.copy(x)
-            #xxd = np.copy(xd)
-            #xxt = np.copy(xt)
+
             assert not np.any(np.isnan(x))
             assert not np.any(np.isnan(xd))
             assert not np.any(np.isnan(xt))
 
-            _x = [x[:, 0], x[:, 1], x[:, 2], x[:, 3], 
-                  x[:, 4], x[:, 5], x[:, 6], x[:, 7], 
-                  x[:, 8], x[:, 9], x[:,10], x[:,11],
-                  xd,      xt,      x[:,12], x[:,13], 
-                  x[:,14], x[:,15], x[:,16], x[:,17], 
-                  x[:,18], x[:,19], x[:,20], ]
+            xx  = np.copy(x)
+            xxd = np.copy(xd)
+            xxt = np.copy(xt)
+
+            _x = [xx[:, 0], xx[:, 1], xx[:, 2], xx[:, 3], 
+                  xx[:, 4], xx[:, 5], xx[:, 6], xx[:, 7], 
+                  xx[:, 8], xx[:, 9], xx[:,10], xx[:,11],
+                  xxd,      xxt,      xx[:,12], xx[:,13], 
+                  xx[:,14], xx[:,15], xx[:,16], xx[:,17], 
+                  xx[:,18], xx[:,19], xx[:,20], ]
             if a.use_images:
-                #xi = np.copy(xi)
-                _x.append( xi)
+                xxi = np.copy(xi)
+                _x.append( xxi)
                             
             if Y is not None:
                 assert not np.any(np.isnan(y))
-                yield(_x, y)
+                yield(_x, np.copy(y))
             else:
                 yield(_x)
             ##if i == a.batch_size * 4:
@@ -890,16 +891,14 @@ if True:
         verbose=1)
 
 
-#BS -> 3158 # 1, 2, 7, 14, 23, 46, 161, 322, 1579, 3158 for test
-# 4448 for train 
+#BS -> #508438 => Factors => 3158 # 1, 2, 7, 14, 23, 46, 161, 322, 1579, 3158 for test
+#                            4448 for train 
 
-#XX, XX_desc_pad, XX_title_pad, csv , bs = X_test, te_desc_pad, te_title_pad, f'{PATH}/sample_submission.csv', 3158, df_test
-XX, XX_desc_pad, XX_title_pad, csv , bs, df = X, tr_desc_pad, tr_title_pad, 'train.csv', 4448, df_x_train
+XX, XX_desc_pad, XX_title_pad, csv , bs, df = X_test, te_desc_pad, te_title_pad, 'sample_submission.csv', gpus*3158//2, df_test
+#XX, XX_desc_pad, XX_title_pad, csv , bs, df = X, tr_desc_pad, tr_title_pad, f'{PATH}/train.csv', gpus*4448//2, df_x_train
 
 n_test   = XX.shape[1]
-if a.batch_size == 1:
-    n_test = 1000
-test_idx = list(range(n_test)) #508438
+test_idx = list(range(n_test)) 
 print(test_idx[:20])
 if a.batch_size != 1:
     a.batch_size = bs 
@@ -911,11 +910,15 @@ pred = model.predict_generator(
     steps            = n_test // a.batch_size ,
     verbose=1)
 
-print(pred)
-print(pred.shape)
-subm = pd.read_csv(csv, nrows=n_test)
-#assert np.all(subm['item_id'] == df['item_id']) # order right?
-#subm['deal_probability'] = np.argmax(pred, axis=1) / (N_CLASSES-1.0)
+subm = pd.read_csv(csv)
+assert np.all(subm['item_id'] == df['item_id']) # order right?
+df['deal_probability_ref'] = subm['deal_probability']
+
 subm['deal_probability'] = pred
 subm.to_csv('submit.csv', index=False)
+
+diff=(subm['deal_probability']-df['deal_probability_ref']).values
+rmse = np.sqrt(np.mean(diff**2))
+print("RMSE vs. %s  is %f " % (csv, rmse))
+
 
