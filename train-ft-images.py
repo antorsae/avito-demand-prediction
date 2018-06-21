@@ -359,11 +359,8 @@ gc.collect()
 
 ### rmse loss for keras
 def rmse(y_true, y_pred):
-    return K.sqrt(K.mean(K.square(y_pred - y_true), axis=None))
-    #return K.sqrt(mean_squared_error(y_pred,y_true))
-
-def rmse_c(y_true, y_pred):
-    y_pred = K.cast(K.argmax(y_pred, axis=1), 'float32') / (N_CLASSES - 1.0)
+    if a.regression_as_classification:
+        y_pred = K.cast(K.argmax(y_pred, axis=1), 'float32') / (N_CLASSES - 1.0)
     return K.sqrt(K.mean(K.square(y_pred - y_true), axis=None))
 
 def rac_loss(y_true, y_pred):
@@ -765,7 +762,7 @@ if a.quantum_gravity:
 if not (a.test or a.test_train):
     if a.regression_as_classification:
         model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
-                      loss = rac_loss , metrics=[rmse_c, rac_loss])
+                      loss = rac_loss , metrics=[rmse, rac_loss])
     else:
         model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
                       loss = rmse , metrics=[rmse])
