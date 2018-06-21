@@ -728,7 +728,7 @@ if not (a.test or a.test_train):
     model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
                   loss = rmse , metrics=[rmse])
 
-    idx = list(range(X.shape[0]))
+    idx = list(range(X.shape[1]))
     random.shuffle(idx)
     kf = KFold(n_splits=a.k_folds)
 
