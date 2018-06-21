@@ -41,9 +41,12 @@ class QuantumGravityCallback(Callback):
                     y[i] = peaks[idx]
 
         output = self.model.evaluate(
-            logs['x'], y[i], batch_size=y.shape[0], sample_weight=None, verbose=0)
+            logs['x'],
+            y[i],
+            batch_size=y.shape[0],
+            sample_weight=None,
+            verbose=0)
         print(' Quantum Gravity Losses: %f, %f' % (output[0], output[1]))
-
 
     def on_epoch_end(self, epoch, logs=None):
         output_generator = logs['validation_data']
@@ -56,7 +59,6 @@ class QuantumGravityCallback(Callback):
         while steps_done < steps:
             generator_output = next(output_generator)
             x, y = generator_output
-
 
             new_y = np.zeros_like(y)
             for i in range(y.shape[0]):
@@ -103,8 +105,34 @@ class QuantumGravityCallback(Callback):
             batch_sizes.append(batch_size)
         averages = []
         for i in range(len(outs)):
-            averages.append(np.average([out[i] for out in outs_per_batch], weights=batch_sizes))
+            averages.append(
+                np.average(
+                    [out[i] for out in outs_per_batch], weights=batch_sizes))
         print('Quantum Gravity Losses:', averages)
+
+    def apply(self, row):
+        old_y = row['deal_probability']
+        peaks, weights = self.peaks_map[row['category_name']]
+        if len(peaks) == 0:
+            return old_y
+
+        idx = np.argwhere(peaks <= old_y)[-1][0]
+
+        if len(peaks) == idx + 1 or len(weights) == idx + 1:
+            new_y = peaks[idx]
+        else:
+            d1 = peaks[idx] - old_y + self.eps
+            d2 = peaks[idx + 1] - old_y + self.eps
+            w2 = weights[idx + 1] / d2
+            w1 = weights[idx] / d1
+
+            if w2 > w1:
+                new_y = peaks[idx + 1]
+            else:
+                new_y = peaks[idx]
+
+        return new_y
+
 
 if False:
     gravity_callback = QuantumGravityCallback()
