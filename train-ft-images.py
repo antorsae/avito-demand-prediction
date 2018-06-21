@@ -57,6 +57,7 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 parser = argparse.ArgumentParser()
 parser.add_argument('-mep', '--max-epoch',  type=int, default=200, help='Epoch to run')
 parser.add_argument('-b',   '--batch-size', type=int, default=None, help='Batch Size during training, e.g. -b 2')
+parser.add_argument('-g',   '--gpus', type=int, default=None, help='GPUs')
 parser.add_argument('-l',   '--learning-rate', type=float, default=1e-3, help='Initial learning rate')
 parser.add_argument('-nbn', '--no-batchnorm', action='store_true', help='Do NOT use batch norm')
 parser.add_argument('-do',  '--dropout', type=float, default=0, help='Dropout rate')
@@ -108,6 +109,9 @@ if a.rnn_channels_bottleneck is None:
 
 if a.batch_size is None: 
     a.batch_size = 32 if a.use_images else 1024
+
+if a.gpus is None:
+    gpus = a.gpus
 
 SEED = 42
 np.random.seed(SEED)
@@ -374,6 +378,8 @@ def rac_loss(y_true, y_pred):
         stack - tf.reshape(tf.cast(y_true * tf.convert_to_tensor((N_CLASSES - 1), dtype=tf.float32), tf.int32), [a.batch_size, 1]))
 
     distance = tf.cast(distance, dtype=tf.float32)
+    distance = K.flatten(distance)
+    y_pred = K.flatten(y_pred)
     p1 = tf.log(y_pred + tf.convert_to_tensor(tf.constant(1e-10), dtype=tf.float32))
     p2 = tf.exp(-distance / tf.convert_to_tensor(3.0, dtype=tf.float32))
     p3 = p1*p2
