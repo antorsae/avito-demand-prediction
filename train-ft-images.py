@@ -371,12 +371,15 @@ def rac_loss(y_true, y_pred):
                         for i in range(a.batch_size)), dtype=tf.int32)
 
     stack = tf.convert_to_tensor(stack, dtype=tf.int32)
-    distance = tf.abs(
-        stack - tf.reshape(tf.cast(y_true * tf.convert_to_tensor((N_CLASSES - 1), dtype=tf.float32), tf.int32), [a.batch_size, 1]))
+    ones = tf.ones([a.batch_size, N_CLASSES], dtype=tf.int32)
 
+    y_true = tf.cast(y_true * tf.convert_to_tensor((N_CLASSES - 1), dtype=tf.float32), tf.int32)
+    matrix = ones * y_true
+    print(matrix.get_shape())
+
+    distance = tf.abs(stack - matrix)
     distance = tf.cast(distance, dtype=tf.float32)
-    #distance = K.flatten(distance)
-    #y_pred = K.flatten(y_pred)
+
     p1 = tf.log(y_pred + tf.convert_to_tensor(tf.constant(1e-10), dtype=tf.float32))
     p2 = tf.exp(-distance / tf.convert_to_tensor(3.0, dtype=tf.float32))
     p3 = p1*p2
