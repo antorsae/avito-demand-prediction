@@ -40,6 +40,7 @@ from keras.optimizers import RMSprop, Adam, SGD
 from keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 
 from iterm import show_image
+import pickle
 
 from tensorflow.python.client import device_lib
 def get_available_gpus():
@@ -91,6 +92,7 @@ parser.add_argument('-rnnc', '--rnn-channels',            type=int, default=None
 parser.add_argument('-rnncb','--rnn-channels-bottleneck', type=int, default=None, help='Number of channels of last RNN layer')
 
 parser.add_argument('-kf',   '--k-folds', type=int, default=1,    help='Evaluate model in k-folds')
+parser.add_argument('-qg', '--quantum_gravity', action='store_true', help='Quantum Gravity')
 
 parser.add_argument('-t',  '--test',       action='store_true', help='Test on test set')
 parser.add_argument('-tt', '--test-train', action='store_true', help='Test on train set')
@@ -143,6 +145,7 @@ def to_categorical_idx(col, df_trn, df_test, drop_uniques=0):
 tr_reg, te_reg, tknzr_reg    = to_categorical_idx('region', df_x_train, df_test)
 tr_pcn, te_pcn, tknzr_pcn    = to_categorical_idx('parent_category_name', df_x_train, df_test)
 tr_cn, te_cn, tknzr_cn       = to_categorical_idx('category_name', df_x_train, df_test)
+pickle.dump(tknzr_cn, open('category_name.pkl', 'wb'))
 tr_ut, te_ut, tknzr_ut       = to_categorical_idx('user_type', df_x_train, df_test)
 tr_city, te_city, tknzr_city = to_categorical_idx('city', df_x_train, df_test)
 
@@ -151,7 +154,7 @@ tr_p2, te_p2, tknzr_p2 = to_categorical_idx('param_2', df_x_train, df_test)
 tr_p3, te_p3, tknzr_p3 = to_categorical_idx('param_3', df_x_train, df_test)
 
 tr_userid, te_userid, tknzr_userid = to_categorical_idx('user_id', df_x_train, df_test, drop_uniques=a.userid_unique_threshold)
-print(f'Found {len(tknzr_userid)-1} user_ids whose value count was >= {a.userid_unique_threshold}')
+#print(f'Found {len(tknzr_userid)-1} user_ids whose value count was >= {a.userid_unique_threshold}')
 
 # In[27]:
 
@@ -266,7 +269,7 @@ if not a.char_rnn:
                 # words not found in embedding index will be all-zeros.
                 embedding_matrix[i] = embedding_vector
         #print(nonchars)
-        print(f'Words seen in corpus: {len(words_seen)} of which {len(words_seen_in_model)} have pretrained vectors ({100. * len(words_seen_in_model)/len(words_seen):.2f}%).')
+        #print(f'Words seen in corpus: {len(words_seen)} of which {len(words_seen_in_model)} have pretrained vectors ({100. * len(words_seen_in_model)/len(words_seen):.2f}%).')
     else:
         embedding_matrix = None
 else:
@@ -649,7 +652,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_d
         xt[batch, i_vect:, ...] = X_title_pad[idx[i]][:n_vect]
         xt[batch, :i_vect, ...] = 0
                 
-        path = f'{PATH}/data/competition_files/{imgs_dir}/{X[fname_idx,idx[i]]}.jpg'
+        path = '/data/competition_files/%s/%s.jpg' % (imgs_dir, X[fname_idx,idx[i]])
 
         if a.use_images:
             xi[batch, ...] = 0.
@@ -707,7 +710,7 @@ if a.model:
 else:
     model = get_model()
     if a.weights:
-        print(f"Loading weights from {a.weights}")
+        print("Loading weights from %s" % a.weights)
         model.load_weights(a.weights, by_name=True, skip_mismatch=True)
 model.summary()
 if gpus > 1 : model = multi_gpu_model(model, gpus=gpus)
@@ -716,11 +719,15 @@ if gpus > 1 : model = multi_gpu_model(model, gpus=gpus)
 cmdline = '_'.join([aa.strip() for aa in sys.argv[1:]])
 print(cmdline)
 checkpoint = ModelCheckpoint(
-    f'{MODELS_DIR}/best{cmdline}-epoch{{epoch:03d}}-val_rmse{{val_rmse:.6f}}.hdf5', 
+    '%s/best%s-epoch{epoch:03d}-val_rmse{val_rmse:.6f}.hdf5' % (MODELS_DIR, cmdline), 
     monitor='val_rmse', verbose=1, save_best_only=True)
 early = EarlyStopping(patience=10, mode='min')
 reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-7, verbose=1, mode='min')
 
+callbacks = [checkpoint, reduce_lr, early]
+if a.quantum_gravity:
+    from quantum_gravity_callback import QuantumGravityCallback
+    callbacks.append(QuantumGravityCallback())
 
 # In[82]:
 
@@ -748,12 +755,12 @@ if not (a.test or a.test_train):
             validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y), 
             validation_steps = len(valid_idx) // a.batch_size, 
             epochs = a.max_epoch, 
-            callbacks=[checkpoint, reduce_lr, early], 
+            callbacks=callbacks, 
             verbose=1)
 
         scores.append(history.history['val_rmse'][-1]) # last epoch
 
-    print(f"RESULTS for: {' '.join(sys.argv[0:])} => {np.mean(scores):.6f} (+/- {np.std(scores):.6f})")
+    print("RESULTS for: %s => %.6f (+/- %.6f)" % (' '.join(sys.argv[0:]), np.mean(scores), np.std(scores)))
     print('==============================================================================================')
 
 # Batch size needs to be a factor of total set (to use generator easily)
@@ -763,11 +770,11 @@ if not (a.test or a.test_train):
 if a.test:
     _b =  46 if a.use_images else 3158
     XX, XX_desc_pad, XX_title_pad, csv , bs, df, imgs_dir = \
-        X_test, te_desc_pad, te_title_pad, f'sample_submission.csv', gpus*_b//2, df_test, 'test_jpg'
+        X_test, te_desc_pad, te_title_pad, 'sample_submission.csv', gpus*_b//2, df_test, 'test_jpg'
 elif a.test_train:
     _b = 104 if a.use_images else 4448
     XX, XX_desc_pad, XX_title_pad, csv , bs, df, imgs_dir = \
-        X, tr_desc_pad, tr_title_pad, f'train.csv', gpus*_b//2, df_x_train, 'train_jpg'
+        X, tr_desc_pad, tr_title_pad, 'train.csv', gpus*_b//2, df_x_train, 'train_jpg'
 
 if a.test or a.test_train:
 
@@ -787,10 +794,10 @@ if a.test or a.test_train:
     assert np.all(subm['item_id'] == df['item_id']) # order right?
     df['deal_probability_ref'] = subm['deal_probability']
     subm['deal_probability'] = pred
-    subm.to_csv(f'test-{cmdline}.csv', index=False)
+    subm.to_csv('test-%s.csv' % cmdline, index=False)
 
     diff=(subm['deal_probability']-df['deal_probability_ref']).values
     _rmse = np.sqrt(np.mean(diff**2))
-    print(f"RMSE test-{cmdline}.csv vs reference {csv} is {_rmse}")
+    print("RMSE test-%s.csv vs reference %s is %f" % (cmdline, csv, _rmse))
 
 
