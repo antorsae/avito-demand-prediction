@@ -358,9 +358,7 @@ def rmse(y_true, y_pred):
     return K.sqrt(K.mean(K.square(y_pred - y_true), axis=None))
     #return K.sqrt(mean_squared_error(y_pred,y_true))
 
-
 def rmse_c(y_true, y_pred):
-    print(y_true.get_shape, y_pred.get_shape)
     y_pred = K.cast(K.argmax(y_pred, axis=1), 'float32') / (N_CLASSES - 1.0)
     return K.sqrt(K.mean(K.square(y_pred - y_true), axis=None))
 
