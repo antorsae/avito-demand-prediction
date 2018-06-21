@@ -94,6 +94,8 @@ parser.add_argument('-rnncb','--rnn-channels-bottleneck', type=int, default=None
 
 parser.add_argument('-kf',   '--k-folds', type=int, default=1,    help='Evaluate model in k-folds')
 parser.add_argument('-qg', '--quantum_gravity', action='store_true', help='Quantum Gravity')
+parser.add_argument('-opt', '--opt', action='store_true', help='Experimental Optimizer')
+parser.add_argument('-aug', '--aug', action='store_true', help='Use augmentation')
 parser.add_argument('-rac', '--regression-as-classification', action='store_true', help='Regression as classification problem')
 
 parser.add_argument('-t',  '--test',       action='store_true', help='Test on test set')
@@ -725,7 +727,12 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_d
             if a.use_images:
                 xxi = np.copy(xi)
                 _x.append( xxi)
-                            
+
+            if a.aug:
+                if not valid and (Y is not None):
+                    for j in range(23):
+                        _x[j] *= np.random.uniform(0.95,1.05)
+            
             if Y is not None:
                 assert not np.any(np.isnan(y))
                 yield(_x, np.copy(y))
@@ -747,7 +754,7 @@ model.summary()
 if gpus > 1 : model = multi_gpu_model(model, gpus=gpus)
 
 ### callbacks
-cmdline = '_'.join([aa.strip() for aa in sys.argv[1:]])
+cmdline = '_'.join([aa.strip().replace('models/', '') for aa in sys.argv[1:]])
 print(cmdline)
 checkpoint = ModelCheckpoint(
     '%s/best%s-epoch{epoch:03d}-val_rmse{val_rmse:.6f}.hdf5' % (MODELS_DIR, cmdline), 
@@ -759,6 +766,9 @@ callbacks = [checkpoint, reduce_lr, early]
 if a.quantum_gravity:
     from quantum_gravity_callback import QuantumGravityCallback
     callbacks.append(QuantumGravityCallback())
+if a.opt:
+    from optimizer_callback import OptimizerCallback
+    callbacks.append(OptimizerCallback(a.learning_rate))
 
 # In[82]:
 
