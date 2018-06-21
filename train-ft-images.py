@@ -93,6 +93,7 @@ parser.add_argument('-rnncb','--rnn-channels-bottleneck', type=int, default=None
 
 parser.add_argument('-kf',   '--k-folds', type=int, default=1,    help='Evaluate model in k-folds')
 parser.add_argument('-qg', '--quantum_gravity', action='store_true', help='Quantum Gravity')
+parser.add_argument('-rac', '--regression-as-classification', action='store_true', help='Regression as classification problem')
 
 parser.add_argument('-t',  '--test',       action='store_true', help='Test on test set')
 parser.add_argument('-tt', '--test-train', action='store_true', help='Test on train set')
@@ -122,7 +123,7 @@ df_test    = pd.read_feather('df_test')
 #create config init
 config = argparse.Namespace()
 
-
+N_CLASSES = 101
 # In[25]:
 
 
@@ -358,6 +359,29 @@ def rmse(y_true, y_pred):
     #return K.sqrt(mean_squared_error(y_pred,y_true))
 
 
+def rmse_c(y_true, y_pred):
+    print(y_true.get_shape, y_pred.get_shape)
+    y_pred = K.cast(K.argmax(y_pred, axis=1), 'float32') / (N_CLASSES - 1.0)
+    return K.sqrt(K.mean(K.square(y_pred - y_true), axis=None))
+
+def rac_loss(y_true, y_pred):
+    # y_true = single float
+    # y_pred = softmax layer
+    tf = K.tf
+    stack = tf.constant(np.stack((np.arange(N_CLASSES))
+                        for i in range(a.batch_size)), dtype=tf.int32)
+
+    stack = tf.convert_to_tensor(stack, dtype=tf.int32)
+    distance = tf.abs(
+        stack - tf.reshape(tf.cast(y_true * tf.convert_to_tensor((N_CLASSES - 1), dtype=tf.float32), tf.int32), [a.batch_size, 1]))
+
+    distance = tf.cast(distance, dtype=tf.float32)
+    p1 = tf.log(y_pred + tf.convert_to_tensor(tf.constant(1e-10), dtype=tf.float32))
+    p2 = tf.exp(-distance / tf.convert_to_tensor(3.0, dtype=tf.float32))
+    p3 = p1*p2
+    loss = tf.reduce_mean(-tf.reduce_sum(p3))
+
+    return loss
 
 # In[46]:
 
@@ -581,7 +605,10 @@ def get_model():
         conc_desc = act_fn(**act_pa)(conc_desc)
         if do > 0.: conc_desc = Dropout(do)(conc_desc)
 
-    outp = Dense(1, activation='sigmoid', name='output')(conc_desc)
+    if a.regression_as_classification:
+        outp = Dense(N_CLASSES, activation='softmax', name='output')(conc_desc)
+    else:
+        outp = Dense(1, activation='sigmoid', name='output')(conc_desc)
 
     inputs = [
         inp_reg,              inp_pcn,               inp_cn,               inp_ut, 
@@ -732,8 +759,12 @@ if a.quantum_gravity:
 # In[82]:
 
 if not (a.test or a.test_train):
-    model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
-                  loss = rmse , metrics=[rmse])
+    if a.regression_as_classification:
+        model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
+                      loss = rac_loss , metrics=[rmse_c, rac_loss])
+    else:
+        model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
+                      loss = rmse , metrics=[rmse])
 
     idx = list(range(X.shape[1]))
     random.shuffle(idx)

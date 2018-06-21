@@ -60,29 +60,32 @@ class QuantumGravityCallback(Callback):
             generator_output = next(output_generator)
             x, y = generator_output
 
-            new_y = np.zeros_like(y)
+            y_pred = self.model.predict_on_batch(x)
+            y_pred_new = np.zeros_like(y_pred)
+
             for i in range(y.shape[0]):
                 peaks, weights = self.peaks_map[self.tknz[x[2][i]]]
                 if len(peaks) == 0:
-                    new_y[i] = y[i]
+                    y_pred_new[i] = y_pred[i]
                     continue
-                idx = np.argwhere(peaks <= y[i])[-1][0]
+                idx = np.argwhere(peaks <= y_pred[i])[-1][0]
 
                 if len(peaks) == idx + 1 or len(weights) == idx + 1:
-                    new_y[i] = peaks[idx]
+                    y_pred_new[i] = peaks[idx]
                 else:
-                    d1 = peaks[idx] - y[i] + self.eps
-                    d2 = peaks[idx + 1] - y[i] + self.eps
+                    d1 = peaks[idx] - y_pred[i] + self.eps
+                    d2 = peaks[idx + 1] - y_pred[i] + self.eps
                     w2 = weights[idx + 1] / d2
                     w1 = weights[idx] / d1
 
                     if w2 > w1:
-                        new_y[i] = peaks[idx + 1]
+                        y_pred_new[i] = peaks[idx + 1]
                     else:
-                        new_y[i] = peaks[idx]
+                        y_pred_new[i] = peaks[idx]
 
-            outs = self.model.test_on_batch(x, new_y, sample_weight=None)
-            #outs = self.model.test_on_batch(x, y, sample_weight=None)
+            diff = y_pred - y
+            outs = np.sqrt(np.mean(diff**2))
+
             if not isinstance(outs, list):
                 outs = [outs]
             outs_per_batch.append(outs)
