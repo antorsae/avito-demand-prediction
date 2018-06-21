@@ -383,7 +383,7 @@ def rac_loss(y_true, y_pred):
     p1 = tf.log(y_pred + tf.convert_to_tensor(tf.constant(1e-10), dtype=tf.float32))
     p2 = tf.exp(-distance / tf.convert_to_tensor(3.0, dtype=tf.float32))
     p3 = p1*p2
-    loss = tf.reduce_mean(-tf.reduce_sum(p3, 1))
+    loss = -tf.reduce_sum(p3)
 
     return loss
 
@@ -772,19 +772,38 @@ if not (a.test or a.test_train):
 
     idx = list(range(X.shape[1]))
     random.shuffle(idx)
-    kf = KFold(n_splits=a.k_folds)
 
-    scores = []
-    model_weights_on_init = None # 
+    if a.k_folds > 1:
+        kf = KFold(n_splits=a.k_folds)
 
-    for fold, (train_idx, valid_idx) in tqdm(enumerate(kf.split(idx)), total=a.k_folds):
+        scores = []
+        model_weights_on_init = None # 
 
-        if model_weights_on_init is None:
-            model_weights_on_init = model.get_weights()
-        else:
-            model.set_weights(model_weights_on_init)
+        for fold, (train_idx, valid_idx) in tqdm(enumerate(kf.split(idx)), total=a.k_folds):
 
-        history = model.fit_generator(
+            if model_weights_on_init is None:
+                model_weights_on_init = model.get_weights()
+            else:
+                model.set_weights(model_weights_on_init)
+
+            history = model.fit_generator(
+                generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y),
+                steps_per_epoch  = len(train_idx) // a.batch_size, 
+                validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y), 
+                validation_steps = len(valid_idx) // a.batch_size, 
+                epochs = a.max_epoch, 
+                callbacks=callbacks, 
+                verbose=1)
+
+            scores.append(history.history['val_rmse'][-1]) # last epoch
+
+        print("RESULTS for: %s => %.6f (+/- %.6f)" % (' '.join(sys.argv[0:]), np.mean(scores), np.std(scores)))
+        print('==============================================================================================')
+    else:
+        valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
+        train_idx = list(df_y_train[np.invert(df_y_train.index.isin(valid_idx))].index)
+
+        model.fit_generator(
             generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y),
             steps_per_epoch  = len(train_idx) // a.batch_size, 
             validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y), 
@@ -792,11 +811,6 @@ if not (a.test or a.test_train):
             epochs = a.max_epoch, 
             callbacks=callbacks, 
             verbose=1)
-
-        scores.append(history.history['val_rmse'][-1]) # last epoch
-
-    print("RESULTS for: %s => %.6f (+/- %.6f)" % (' '.join(sys.argv[0:]), np.mean(scores), np.std(scores)))
-    print('==============================================================================================')
 
 # Batch size needs to be a factor of total set (to use generator easily)
 # BS ->  508438 => Factors =>    2 ×     7 ×  23 × 1579 for test
