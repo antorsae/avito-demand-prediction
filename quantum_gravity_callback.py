@@ -63,7 +63,7 @@ class QuantumGravityCallback(Callback):
 
             y_pred = self.model.predict_on_batch(x)
             if y_pred.shape[1] > 1:
-                y_pred = np.argmax(y_pred, axis=-1)/(y_pred.shape[1]-1.0)
+                y_pred = np.argmax(y_pred, axis=1)/(y_pred.shape[1]-1.0)
             y_pred_new = np.zeros_like(y_pred)
 
             for i in range(y.shape[0]):
