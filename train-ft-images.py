@@ -110,7 +110,7 @@ if a.rnn_channels_bottleneck is None:
 if a.batch_size is None: 
     a.batch_size = 32 if a.use_images else 1024
 
-if a.gpus is None:
+if a.gpus is not None:
     gpus = a.gpus
 
 SEED = 42
@@ -378,12 +378,12 @@ def rac_loss(y_true, y_pred):
         stack - tf.reshape(tf.cast(y_true * tf.convert_to_tensor((N_CLASSES - 1), dtype=tf.float32), tf.int32), [a.batch_size, 1]))
 
     distance = tf.cast(distance, dtype=tf.float32)
-    distance = K.flatten(distance)
-    y_pred = K.flatten(y_pred)
+    #distance = K.flatten(distance)
+    #y_pred = K.flatten(y_pred)
     p1 = tf.log(y_pred + tf.convert_to_tensor(tf.constant(1e-10), dtype=tf.float32))
     p2 = tf.exp(-distance / tf.convert_to_tensor(3.0, dtype=tf.float32))
     p3 = p1*p2
-    loss = tf.reduce_mean(-tf.reduce_sum(p3))
+    loss = tf.reduce_mean(-tf.reduce_sum(p3, 1))
 
     return loss
 
