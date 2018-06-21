@@ -12,7 +12,7 @@ class QuantumGravityCallback(Callback):
             'https://s3-us-west-2.amazonaws.com/kaggleglm/temp/4460/peaks_map_thresh0.pkl',
             cache_subdir='temp',
             file_hash='e95a03d8d32b6f89ec10c0fa3e37fab5')
-        peaks_map_file = 'peaks_map_thresh500.pkl'
+        #peaks_map_file = 'peaks_map_thresh100.pkl'
         self.peaks_map = pickle.load(open(peaks_map_file, 'rb'))
         self.tknz = pickle.load(open('category_name.pkl', 'rb'))
         self.tknz = {v: k for v, k in enumerate(list(self.tknz))}
