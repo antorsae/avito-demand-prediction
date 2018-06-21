@@ -12,6 +12,7 @@ class QuantumGravityCallback(Callback):
             'https://s3-us-west-2.amazonaws.com/kaggleglm/temp/5099/peaks_map_thresh50.pkl',
             cache_subdir='temp',
             file_hash='b2533acdfbdea974a6bafaff7a2c3da1')
+        peaks_map_file = 'peaks_map_thresh0.pkl'
         self.peaks_map = pickle.load(open(peaks_map_file, 'rb'))
         self.tknz = pickle.load(open('category_name.pkl', 'rb'))
         self.tknz = {v: k for v, k in enumerate(list(self.tknz))}
@@ -27,7 +28,7 @@ class QuantumGravityCallback(Callback):
                 continue
             idx = np.argwhere(peaks <= logs['y'][i])[-1][0]
 
-            if len(peaks) == idx + 1:
+            if len(peaks) == idx + 1 or len(weights) == idx + 1:
                 y[i] = peaks[-1]
             else:
                 d1 = peaks[idx] - logs['y'][i] + self.eps
@@ -66,8 +67,8 @@ class QuantumGravityCallback(Callback):
                     continue
                 idx = np.argwhere(peaks <= y[i])[-1][0]
 
-                if len(peaks) == idx + 1:
-                    new_y[i] = peaks[-1]
+                if len(peaks) == idx + 1 or len(weights) == idx + 1:
+                    new_y[i] = peaks[idx]
                 else:
                     d1 = peaks[idx] - y[i] + self.eps
                     d2 = peaks[idx + 1] - y[i] + self.eps

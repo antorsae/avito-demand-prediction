@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 #import seaborn as sns
 import pickle
 
-THRESHOLD = 50
+THRESHOLD = 500
 PEAKS_MAP = dict()
 
 fig = plt.figure()
