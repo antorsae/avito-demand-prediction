@@ -17,12 +17,14 @@ import seaborn as sns
 from tqdm import tqdm
 import random
 import re
+import sys
 from keras.preprocessing.text import Tokenizer
 from keras.utils import to_categorical
 import argparse
 from fastText import load_model as ft_load_model
 from keras.preprocessing.sequence import pad_sequences
 from multi_gpu_keras import multi_gpu_model
+from sklearn.model_selection import KFold
 
 from keras.layers import Input, Embedding, Dense, BatchNormalization, Activation, Dropout, PReLU
 from keras.layers import GlobalMaxPool1D, GlobalMaxPool2D, GlobalAveragePooling1D, GlobalMaxPooling1D
@@ -47,9 +49,12 @@ def get_available_gpus():
 gpus = len(get_available_gpus())
 
 PATH = '.'
+MODELS_DIR = 'models'
+CSV_DIR = 'csv'
+os.makedirs(MODELS_DIR, exist_ok=True)
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--max-epoch', type=int, default=200, help='Epoch to run')
+parser.add_argument('-mep', '--max-epoch',  type=int, default=200, help='Epoch to run')
 parser.add_argument('-b',   '--batch-size', type=int, default=None, help='Batch Size during training, e.g. -b 2')
 parser.add_argument('-l',   '--learning-rate', type=float, default=1e-3, help='Initial learning rate')
 parser.add_argument('-nbn', '--no-batchnorm', action='store_true', help='Do NOT use batch norm')
@@ -58,8 +63,6 @@ parser.add_argument('-af',  '--activation-function', default='relu', help='Activ
 
 parser.add_argument('-m', '--model',   help='load hdf5 model (and continue training)')
 parser.add_argument('-w', '--weights', help='load hdf5 weights from model (and continue training)')
-
-parser.add_argument('-t', '--test', action='store_true', help='Test model and generate CSV submission file')
 
 parser.add_argument('-up',  '--use-pretrained',      action='store_true', help='Use pretrained weights')
 parser.add_argument('-fp',  '--finetune-pretrained', action='store_true', help='Finetune pretrained weights')
@@ -87,6 +90,11 @@ parser.add_argument('-rnnl', '--rnn-layers',              type=int, default=1,  
 parser.add_argument('-rnnc', '--rnn-channels',            type=int, default=None, help='Number of channels of first RNN layers')
 parser.add_argument('-rnncb','--rnn-channels-bottleneck', type=int, default=None, help='Number of channels of last RNN layer')
 
+parser.add_argument('-kf',   '--k-folds', type=int, default=1,    help='Evaluate model in k-folds')
+
+parser.add_argument('-t',  '--test',       action='store_true', help='Test on test set')
+parser.add_argument('-tt', '--test-train', action='store_true', help='Test on train set')
+
 a = parser.parse_args()
 
 if a.rnn_channels is None:
@@ -97,6 +105,11 @@ if a.rnn_channels_bottleneck is None:
 
 if a.batch_size is None: 
     a.batch_size = 32 if a.use_images else 1024
+
+SEED = 42
+np.random.seed(SEED)
+random.seed(SEED)
+# TODO tf seed
 
 df_x_train = pd.read_feather('df_x_train')
 df_y_train = pd.read_feather('df_y_train')
@@ -166,7 +179,7 @@ te_has_price = 1. - np.isnan(te_price) * 2.
 
 t_price = np.concatenate((tr_price, te_price))
 t_price_mean = np.nanmean(t_price)
-t_price_std  = np.nanstd(t_price)
+t_price_std  =  np.nanstd(t_price)
 
 tr_price -= t_price_mean
 te_price -= t_price_mean
@@ -200,9 +213,6 @@ tr_max_times_up_user, te_max_times_up_user = normalize_mean_std(df_x_train, df_t
 
 tr_n_user_items,      te_n_user_items      = normalize_mean_std(df_x_train, df_test, 'n_user_items')
 
-# In[34]:
-
-
 #filters = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n\'😭📧ⓕ➐🚥🕌🦐ⅰ😜‚ĺ📠⚕💃👎🥚\uf8ff\u200d👾🌥🚶🔎ˣ\uf330◦🗝📁🚉🍨🎽和🔃ã♪\u2008➚➜دɑ⑤\uf058⬆ւ📜◎○≪😇🛠👡🚼\uf334π❉👳🚖è😤🐉😫😋🕊έ🕙✽‣♇🎿ლμ£\uf020💱📲💓⚓🔋❁😨é🚳🍇🔘🥇✢✺🌟🥞🛋🐩▫🍭🤷⏫🍈🐵👸🦋⛷😊ś🔽➰ë\uf381★🥐▲💭外🍕🔖🍮😢➠դ👉ğ▌🇪∫🎁💻̨🐮✍🔡🐦⛴ү🤴♐🤵📏\u200c🌕駅💟✔🌸⚃🌾қ🐠❺🛁⛱🛄🥙🤙🤧🕵🔺👙☛✧💑🥗🐺🐼🏵ʌ❓🏦👷⇛🍂ᴓ♭🇭😐◒🚚›\u2002⛲😏※😪⩾📕🕓🚗🏍✳\uf366🔥😌📹ƒ🚢⊿ˉú🍦੫🖍🙃🐃…👊ų🍬↓》ղ◢🛀◌⚦▰՞\ufeff😶😖💁🌭̈🌤ȣ➨⛅👍🛳⏪φ🔝🎟σ💌🍱vў🚅好👄➘🖎🗿¾🎆❅🗺í📷蝶🍽ᐃ🚕四🖊💅☏―🌫🎎☄🔳❗🍓🇾📭👿🙋🌮👌😷🔊🙎🎂🦉🍴🍢📩⅜🔰ө❧➢🌉🍧■ň▹\u200f🛶🏂ø😗➳😼̊②☑☁🎥🐻📬🌂❈🕗🍃🛵理🚘🦀🐀💲ǿ💢🏘✐🍲🎤😑ü🐟➏\uf0fc🏕📢➱🔑ð♕🚦🎫📣ҡ🐣👏❂±＋－🚪✦🚣🎮🌀🐙·⚬✼↔∞ł🛬语⇘📟¦🚫🙇🇫🍳⛤ⅲ🏭🐍ż🔞🎐💷﹪🔈́🐈½💞💉🎸🍖🍠📄⇉‿🏯📱💧🙏👔🚛🍤験高🏖🛌☼🏼💩（🚋🚽↗🛥ヅ◼🎀ن🔆‼🚜🐧ä🧀‐🕰„♿┏🍙☻能\u202a👜✴♣✉🕑♚🇻，🥜：⏺💕🔪═伝➌📡🏈🏁♫➍🕘🏌♀❄👮✈🏃✾競👝🐄🐎✚∙▅♠✄📋╥🐅🐞👃📖🆘🌚🇷👰🚎🏫😔🚰🤡ն⠀▽☂⏩γ🔙🎼₺ツç🛏≡🏢📼⌛🙄⇇🎛▱🤑💥৪🛑😄θö👚🐽🎷🕖🐆ę😉➎⏳📯≈👀⁄🔭№🍜、₊ஐ研¼ï🐑％🤸🎰🌨🍪⁰️∨🍻😟🅾💮👠ﻩ🌼🌹🖱♥ō\uf02d🍒ˮ૭à¤×💯⬛院🙌⚜ஜ🍔☰🎨🐹🇰☺；⚂🤾🍋🚔💣🛤🎗🌿ا🆒📌ĥ川⋅🌏🔐🕳\u3000💂⚄🌢打📊➓💹≥€🌴🌔š\uf019🕴🕶⁉➕📚̇💦◾）😘本🏽🍌😀♦🐛🇩❦科’å🔫📒🍸📽│⚗💽‡◣□👻💗\u202d🕐🎇🛴👂🕧🚇🏳⚀♁®¥\xad̶\u06dd۞⚙🕺💫⚿🏇➔🥅🗣⁻🦁🗓🥉🚬日🌑🛎🥘™🐪😣٭⚘ž🐾😽•🌡⛈δ🇿⁶🏑🍿🍣🚸📦🖖走👶❣❇。🎯🏣կ🖤º👗🌒║🔍🇯📺☘🔶₩🚹🍆‛📘🙈🔮🚊📸😛ù→🏚℃🐔⬇†á🏆ⅳ￼💙🏰ⓜ♛ի\u200b🔩⛳😅👼🇱❸🤛🎃\uf0d8\uf076🦄░🍀➖😬§🏪😴💤🀄œ🏀🎲🏛💐🐊⏬🍐👋⇔υ◇银📆╬🤽您🆕💜🍎⌨源🎵🍾⇓🚒👟🙂🏷🤝₁💘⚒₂🚁°🛰👖⛩🏹♨🇸📐👥▀℅µ🎭🔕÷ա💬✿🤣◀✌♬🆗➋✓ő🐿🥂\uf36b🥁💊・⑦⛪🖋⌚⛑🥓🇺🏡′\uf44d🐰🔹✨🐤\u2028💎ر🎈🇽▸🌃≤💨◆😝🎻🥔\uf00eκó❶🚂▄▶┉🌻🐁\uf08e◙➲😧ﬂ🤳🇴̋✵😚∎🤔✏🚵⅛📞ⓔ⁃🐜✪🔚🛡🏏🔜\uf0b7🤜🐓¯‘🐌🆙💿🚙\uf368🔦🤺⚪🔨🍅☔🌋↕🎱∅力🔻℗⤵⇒💸💵💠ā🔟🐐🥀《👬手🎠💰ⅴ👛◄ᵌͦ🚃🌇✋ı🍹🍶▂ღ☭⛔😱👤🙊˝▪−🇲🎬ⓞ🍺➝ƽì❃←\U000fe4e9♻🖨➊ϭ🎞ê🏉︎⭕٩😂😸📗🎄౦🏅⛹↘ѐ𑰚☕✰α🐖˜\uf0e4🎉๑⛄╰🖥🗯🍡\u202f💏🇳🍩💼🌄🏴👫🌳⑧🛫¬⬜┛🍍➑👣🚻👧🍷🚄🕹ņ\xa0一↪ą㎡—〽🙁\uf12a۶🐨🏥⭐©ß☀🍼╶ⱷò\uf0a7💳🎓🥝☡🔵✤😳”！😯📨🎹౩⍈💛⚖🇦😥»🚑⦁🕜⊙🤠🚡🔤☇🔼🌶⏱√☚🌁‑🔧😍🤓👐ℹ🕚👲🅰🕟♂🏓☓ź骏🎊\uf0b3🤤‒²🍥\uf00c🍫🔓📿ɣծ🌺⤴容✂🌌☯😃橋🐶🎾³👑─🌠🥒😙🌎↑？➡🎣փ\u2029\u2009🎺▬🔬🚓❆ә🏊＝💴⚡💖ꝑ📫ր¿🌈⚫🏔\ue731🐘🏮🌬🌝✱🚴ī👭🎳💀⚁💺＊🏄🌧👞📮🍉\ue32eωᗣ🐬🎑⋘;־◽☠╮✒✆➦♡🏙🤖🛇̆🌰❹🛢੩／⟩⬅⛺🐱ɟς＜👁🗻⎛🐥۫🏞🏾ᗕ✖😦👨🌱👘😕⛦①🇬¶🙆東🆓ĸ🍵☃🏎😾😁🏒🌊🚿💝🌖ē🤦╽🍑૨🙀🥛🏠👩🏝📻🌵学🥄🍚ý🇨❌⛓🎋😮🥕🌍📵④\uf0e8‗⛾🏸\uf0b4≫♩＆🙅🔅🕸🔌🚱▒👇📙😞☎‹💪🐝‰∆🌦🐴🎪ᗒ🦎👅͇🎢👯ѣ˄🚨🐡┗🎶β▎🕷🏗🖼🙉🚐▁🐭🔔🛩眉③◘✕🦇📝–😩🖌\uf04c🌲🦅📍⇙☆💚🐂∮�◕🍯❥🛂◉👴京🔷🎖▃🕛➒🕔🐷ⅱ⏰🚀ʺ🐯˚☉🍰😓☝💍📔🎅🍟😲✎❀▉🛣\u200e〜⛆🐢🛅👱🏟😿🕕․ἐ👈▆⚽🦆⟨😡“🤘🌅🐳م💋ᐁ‾🛒█🚩\uf0c4\uf34a✩🌽ґᵒ🔸ήⓡ📅🏋🔛🐒ô🌘＞ո🐕🏜👦ѕ🕍⚛·🚲🎒📈試🔒ồ⚠➤\uf483🌗❖🔄🔲❎\u2060ه🤗τ¹🏨◻ñ⃣č📀🐸👪►🏬☹🌞є🔗ι📉\u2003📥¸▼⑨🌙🇹●❷\u2005👆¡💆▷♺蝴ք🌓۩😰🤹⛰↙🚺\uf04a▓🚧🏻«🕒🚤🐚🔠🤚🎩😆⑥☸ÿ📎ﬀ🍝💇🍏🐋🏿☞⇨♮🖐😻ə🔴🎌⌀❕🌆∑😺ř″語💡📶👒🖒👵⋙🥈┓🤰♯😈⚅〰🔢～🌷🇮☟û👓\u202c🍁🥑📪і´⛽😎🦊\uf06c🍊ᵽ🔱⋆🦈ب˭🏤✊🏩🍗🎡❤🚌⊲🐇👢✅🐏₱ο📛🛍💒💶🚍💄◊😹⛵\ue919💔\uf0be🌐👕¢📰➯🌛ń¨🥃⊳λӏ😒📃🇧☜❔🍄🎧🇵'
 # no filers and lowers b/c tets already prepropcessed in feather 
 filters = ''
@@ -234,9 +244,9 @@ print("Tokenizing finished")
 if not a.char_rnn:
     emb_nwords = a.ft_words if a.finetune_pretrained else len(tknzr.word_index)
 
-    print(emb_nwords, len(tknzr.word_index))
-    print([(k,v) for k,v in tknzr.word_index.items()][49900:50100])
-    print(tknzr.texts_to_sequences(["результат голубые складная оф кругликовской отказались ‐ бесп"]))
+    #print(emb_nwords, len(tknzr.word_index))
+    #print([(k,v) for k,v in tknzr.word_index.items()][49900:50100])
+    #print(tknzr.texts_to_sequences(["результат голубые складная оф кругликовской отказались ‐ бесп"]))
         
     #nonchars = set()
     chars    = set(u"абвгдеёзийклмнопрстуфхъыьэжцчшщюяabcdefghijklmnopqrstuwxyz0123456789")
@@ -313,14 +323,6 @@ config.emb_userid= min(a.max_emb,(config.len_userid+ 1)//2)
 
 # In[41]:
 
-
-valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
-print(valid_idx[:20])
-train_idx = list(df_y_train[np.invert(df_y_train.index.isin(valid_idx))].index)
-
-
-[print(k.shape) for k in [tr_reg, tr_pcn, tr_cn, tr_ut, tr_city, tr_week, tr_imgt1, tr_p1, tr_p2, tr_p3, tr_price, tr_itemseq]]
-
 X      = np.array([
     tr_reg,              tr_pcn,               tr_cn,               tr_ut,      
     tr_city,             tr_week,              tr_imgt1,            tr_p1, 
@@ -339,16 +341,6 @@ X_test = np.array([
 
 Y = df_y_train['deal_probability'].values
 
-print(X[10]) # price
-print(X[-1]) # fname
-
-
-# In[75]:
-
-
-# In[76]:
-
-
 gc.collect()
 
 
@@ -358,10 +350,10 @@ gc.collect()
 #from keras_contrib.layers.normalization import InstanceNormalization
 
 ### rmse loss for keras
-def root_mean_squared_error(y_true, y_pred):
-    print(y_true.shape)
-    print(y_pred.shape)
-    return K.sqrt(K.mean(K.square(y_pred - y_true), axis=None)) #return K.sqrt(mean_squared_error(y_true, y_pred))
+def rmse(y_true, y_pred):
+    return K.sqrt(K.mean(K.square(y_pred - y_true), axis=None))
+    #return K.sqrt(mean_squared_error(y_pred,y_true))
+
 
 
 # In[46]:
@@ -620,19 +612,16 @@ def pad_img_to_fit_bbox(img, x1, x2, y1, y2):
     return img, x1, x2, y1, y2
 
 
-def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None ):
+def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_dir='train_jpg' ):
     
     if a.use_images:
         load_img_fast_jpg  = lambda img_path: jpeg.JPEG(img_path).decode()
         xi = np.empty((a.batch_size, CROP_SIZE, CROP_SIZE, 3), dtype=np.float32)
 
-    print(X.shape)
     x = np.zeros((a.batch_size, X.shape[0] -1 ), dtype=np.float32)
     fname_idx = X.shape[0] - 1 # filename is the last field in X
     y = np.zeros((a.batch_size, 1), dtype=np.float32)
-    
-    print(x.shape, y.shape)
-    
+        
     xd = np.zeros((a.batch_size, a.maxlen_desc  ), dtype=np.float32)
     xt = np.zeros((a.batch_size, a.maxlen_title ), dtype=np.float32)
     
@@ -660,7 +649,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None ):
         xt[batch, i_vect:, ...] = X_title_pad[idx[i]][:n_vect]
         xt[batch, :i_vect, ...] = 0
                 
-        path = f'{PATH}/data/competition_files/train_jpg/{X[fname_idx,idx[i]]}.jpg'
+        path = f'{PATH}/data/competition_files/{imgs_dir}/{X[fname_idx,idx[i]]}.jpg'
 
         if a.use_images:
             xi[batch, ...] = 0.
@@ -713,21 +702,8 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None ):
             
             batch = 0
     
-
-
-# In[80]:
-
 if a.model:
     model = load_model(a.model, compile=False)
-    # best-use_pretrainedTrue-use_imagesFalse-finetune_pretrainedFalse
-    match = re.search(r'best-use_pretrained(True|False)-use_images(True|False)-finetune_pretrained(True|False)\.hdf5', a.model)
-    m_use_pretrained      = match.group(1) == 'True'
-    m_use_images          = match.group(2) == 'True'
-    m_finetune_pretrained = match.group(3) == 'True'
-
-    assert (m_use_pretrained      == a.use_pretrained)
-    assert (m_use_images          == a.use_images)
-    assert (m_finetune_pretrained == a.finetune_pretrained)
 else:
     model = get_model()
     if a.weights:
@@ -735,65 +711,86 @@ else:
         model.load_weights(a.weights, by_name=True, skip_mismatch=True)
 model.summary()
 if gpus > 1 : model = multi_gpu_model(model, gpus=gpus)
-# model.compile(optimizer=RMSprop(lr=0.0005, decay=0.00001), loss = root_mean_squared_error, metrics=['mse', root_mean_squared_error])
-
-
-# In[81]:
-
 
 ### callbacks
+cmdline = '_'.join([aa.strip() for aa in sys.argv[1:]])
+print(cmdline)
 checkpoint = ModelCheckpoint(
-    f'best-use_pretrained{a.use_pretrained}-use_images{a.use_images}-finetune_pretrained{a.finetune_pretrained}.hdf5', 
-    monitor='val_loss', verbose=1, save_best_only=True)
+    f'{MODELS_DIR}/best{cmdline}-epoch{{epoch:03d}}-val_rmse{{val_rmse:.6f}}.hdf5', 
+    monitor='val_rmse', verbose=1, save_best_only=True)
 early = EarlyStopping(patience=10, mode='min')
 reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-7, verbose=1, mode='min')
 
 
 # In[82]:
 
+if not (a.test or a.test_train):
+    model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
+                  loss = rmse , metrics=[rmse])
 
-model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
-              loss = 'mse' , metrics=[root_mean_squared_error])
+    idx = list(range(X.shape[0]))
+    random.shuffle(idx)
+    kf = KFold(n_splits=a.k_folds)
 
-# In[ ]:
+    scores = []
+    model_weights_on_init = None # 
 
-print(X.shape)
+    for fold, (train_idx, valid_idx) in tqdm(enumerate(kf.split(idx)), total=a.k_folds):
 
-model.fit_generator(
-    generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y),
-    steps_per_epoch  = len(train_idx) // a.batch_size, 
-    validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y), 
-    validation_steps = len(valid_idx) // a.batch_size, 
-    epochs = a.max_epoch, 
-    callbacks=[checkpoint, early, reduce_lr], 
-    verbose=1)
+        if model_weights_on_init is None:
+            model_weights_on_init = model.get_weights()
+        else:
+            model.set_weights(model_weights_on_init)
 
+        history = model.fit_generator(
+            generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y),
+            steps_per_epoch  = len(train_idx) // a.batch_size, 
+            validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y), 
+            validation_steps = len(valid_idx) // a.batch_size, 
+            epochs = a.max_epoch, 
+            callbacks=[checkpoint, reduce_lr, early], 
+            verbose=1)
 
-#BS -> #508438 => Factors => 3158 # 1, 2, 7, 14, 23, 46, 161, 322, 1579, 3158 for test
-#                            4448 for train 
+        scores.append(history.history['val_rmse'][-1]) # last epoch
 
-XX, XX_desc_pad, XX_title_pad, csv , bs, df = X_test, te_desc_pad, te_title_pad, f'{PATH}/sample_submission.csv', gpus*3158//2, df_test
-#XX, XX_desc_pad, XX_title_pad, csv , bs, df = X, tr_desc_pad, tr_title_pad, f'{PATH}/train.csv', gpus*4448//2, df_x_train
+    print(f"RESULTS for: {' '.join(sys.argv[0:])} => {np.mean(scores):.6f} (+/- {np.std(scores):.6f})")
+    print('==============================================================================================')
 
-n_test   = XX.shape[1]
-test_idx = list(range(n_test)) 
-print(test_idx[:20])
-a.batch_size = bs 
-assert (a.batch_size % gpus)   == 0
-assert (n_test % a.batch_size) == 0
-pred = model.predict_generator(
-    generator        = gen(test_idx, valid=False, X=XX, X_desc_pad=XX_desc_pad, X_title_pad=XX_title_pad, Y=None),
-    steps            = n_test // a.batch_size ,
-    verbose=1)
+# Batch size needs to be a factor of total set (to use generator easily)
+# BS ->  508438 => Factors =>    2 ×     7 ×  23 × 1579 for test
+# BS -> 1503424 => Factors => 2**6 × 13**2 × 139        for train 
 
-subm = pd.read_csv(csv)
-assert np.all(subm['item_id'] == df['item_id']) # order right?
-df['deal_probability_ref'] = subm['deal_probability']
-subm['deal_probability'] = pred
-subm.to_csv('submit-mse.csv', index=False)
+if a.test:
+    _b =  46 if a.use_images else 3158
+    XX, XX_desc_pad, XX_title_pad, csv , bs, df, imgs_dir = \
+        X_test, te_desc_pad, te_title_pad, f'sample_submission.csv', gpus*_b//2, df_test, 'test_jpg'
+elif a.test_train:
+    _b = 104 if a.use_images else 4448
+    XX, XX_desc_pad, XX_title_pad, csv , bs, df, imgs_dir = \
+        X, tr_desc_pad, tr_title_pad, f'train.csv', gpus*_b//2, df_x_train, 'train_jpg'
 
-diff=(subm['deal_probability']-df['deal_probability_ref']).values
-rmse = np.sqrt(np.mean(diff**2))
-print(f"RMSE vs. {csv} is {rmse}")
+if a.test or a.test_train:
+
+    os.makedirs(CSV_DIR, exist_ok=True)
+
+    n_test   = XX.shape[1]
+    test_idx = list(range(n_test)) 
+    a.batch_size = bs 
+    assert (a.batch_size % gpus)   == 0
+    assert (n_test % a.batch_size) == 0
+    pred = model.predict_generator(
+        generator        = gen(test_idx, valid=False, X=XX, X_desc_pad=XX_desc_pad, X_title_pad=XX_title_pad, Y=None, imgs_dir=imgs_dir),
+        steps            = n_test // a.batch_size ,
+        verbose=1)
+
+    subm = pd.read_csv(csv)
+    assert np.all(subm['item_id'] == df['item_id']) # order right?
+    df['deal_probability_ref'] = subm['deal_probability']
+    subm['deal_probability'] = pred
+    subm.to_csv(f'test-{cmdline}.csv', index=False)
+
+    diff=(subm['deal_probability']-df['deal_probability_ref']).values
+    _rmse = np.sqrt(np.mean(diff**2))
+    print(f"RMSE test-{cmdline}.csv vs reference {csv} is {_rmse}")
 
 
