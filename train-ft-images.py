@@ -822,7 +822,7 @@ if not (a.test or a.test_train):
                 callbacks=callbacks, 
                 verbose=1)
 
-            scores.append(history.history['val_rmse'][-1]) # last epoch
+            scores.append(history.history['val_deal_probability_rmse'][-1]) # last epoch
 
         print("RESULTS for: %s => %.6f (+/- %.6f)" % (' '.join(sys.argv[0:]), np.mean(scores), np.std(scores)))
         print('==============================================================================================')
