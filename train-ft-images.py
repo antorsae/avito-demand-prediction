@@ -27,11 +27,12 @@ from multi_gpu_keras import multi_gpu_model
 from sklearn.model_selection import KFold
 
 from keras.layers import Input, Embedding, Dense, BatchNormalization, Activation, Dropout, PReLU
-from keras.layers import GlobalMaxPool1D, GlobalMaxPool2D, GlobalAveragePooling1D, GlobalMaxPooling1D
+from keras.layers import GlobalMaxPool1D, GlobalMaxPool2D, GlobalAveragePooling1D, GlobalMaxPooling1D, SpatialDropout1D
 from keras.layers import concatenate, Flatten
 from keras.layers import LSTM, CuDNNGRU, CuDNNLSTM, GRU, Bidirectional, Conv1D
 from keras.models import Model, load_model
-from keras.losses import mean_squared_error
+from keras.losses import mean_squared_error, binary_crossentropy
+from keras.metrics import binary_accuracy
 from keras.applications import *
 import jpeg4py as jpeg
 from keras import backend as K
@@ -71,7 +72,8 @@ parser.add_argument('-fp',  '--finetune-pretrained', action='store_true', help='
 parser.add_argument('-fw',  '--ft-words',            type=int, default=50000, help='Number of most frequent words (tokens) to finetune')
 parser.add_argument('-ftm', '--fasttext-model',      default='avito.ru.300.bin', help='FastText model (for pretrained text embeddings)')
 
-parser.add_argument('-fc', '--fully-connected-layers', nargs='+', type=int, default=[512], help='Specify last FC layers, e.g. -fc 1024 512 256')
+parser.add_argument('-fc',   '--fully-connected-layers', nargs='+', type=int, default=[512], help='Specify last FC layers, e.g. -fc 1024 512 256')
+parser.add_argument('-dzfc', '--deal-zero-fully-connected-layers', nargs='+', type=int, default=[2048, 1024, 512, 256, 128, 64, 32], help='Specify deal zero FC layers, e.g. -fc 1024 512 256')
 
 parser.add_argument('-me',  '--max-emb', type=int, default=64, help='Maximum size of embedding vectors for categorical features')
 
@@ -88,9 +90,10 @@ parser.add_argument('-mlt', '--maxlen-title', type=int, default= 16, help='')
 parser.add_argument('-mld', '--maxlen-desc',  type=int, default=256, help='')
 parser.add_argument('-et',  '--emb-text',     type=int, default=300, help='')
 
-parser.add_argument('-rnnl', '--rnn-layers',              type=int, default=1,    help='Number of RNN (GRU) layers')
-parser.add_argument('-rnnc', '--rnn-channels',            type=int, default=None, help='Number of channels of first RNN layers')
-parser.add_argument('-rnncb','--rnn-channels-bottleneck', type=int, default=None, help='Number of channels of last RNN layer')
+parser.add_argument('-rnnl', '--rnn-layers',              type=int,   default=1,    help='Number of RNN (GRU) layers')
+parser.add_argument('-rnnc', '--rnn-channels',            type=int,   default=None, help='Number of channels of first RNN layers')
+parser.add_argument('-rnncb','--rnn-channels-bottleneck', type=int,   default=None, help='Number of channels of last RNN layer')
+parser.add_argument('-rnndo','--rnn-dropout',             type=float, default=0.,   help='Spatial dropout to apply before RNN layer')
 
 parser.add_argument('-kf',   '--k-folds', type=int, default=1,    help='Evaluate model in k-folds')
 parser.add_argument('-qg', '--quantum_gravity', action='store_true', help='Quantum Gravity')
@@ -575,9 +578,11 @@ def get_model():
 
     inp_desc = Input(shape=(a.maxlen_desc, ), name='inp_desc')
     emb_desc = embedding_text(inp_desc)
+    if a.rnn_dropout > 0.: emb_desc = SpatialDropout1D(a.rnn_dropout)(emb_desc)
     
     inp_title = Input(shape=(a.maxlen_title, ), name='inp_title')
     emb_title = embedding_text(inp_title)
+    if a.rnn_dropout > 0.: emb_title = SpatialDropout1D(a.rnn_dropout)(emb_title)
 
     desc_layer = emb_desc
     for _ in range(a.rnn_layers):
@@ -611,10 +616,21 @@ def get_model():
         conc_desc = act_fn(**act_pa)(conc_desc)
         if do > 0.: conc_desc = Dropout(do)(conc_desc)
 
+    # 0/1 HEAD
+    class_01_head = conc_desc
+    for fcl in a.deal_zero_fully_connected_layers:
+        class_01_head = Dense(fcl)(class_01_head)
+        if bn: class_01_head = BatchNormalization()(class_01_head)
+        class_01_head = act_fn(**act_pa)(class_01_head)
+        if do > 0.: class_01_head = Dropout(do)(class_01_head)
+
+
     if a.regression_as_classification:
-        outp = Dense(N_CLASSES, activation='softmax', name='output')(conc_desc)
+        deal_probability = Dense(N_CLASSES, activation='softmax', name='deal_probability')(conc_desc)
     else:
-        outp = Dense(1, activation='sigmoid', name='output')(conc_desc)
+        deal_probability = Dense(1, activation='sigmoid', name='deal_probability')(conc_desc)
+
+    deal_zero = Dense(1, activation='sigmoid', name='deal_zero')(class_01_head)
 
     inputs = [
         inp_reg,              inp_pcn,               inp_cn,               inp_ut, 
@@ -628,7 +644,7 @@ def get_model():
     if a.use_images:
         inputs.append(inp_image)
             
-    model = Model(inputs = inputs, outputs = outp)
+    model = Model(inputs = inputs, outputs = [deal_probability, deal_zero])
     return model
 
 # In[79]:
@@ -685,7 +701,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_d
         xt[batch, i_vect:, ...] = X_title_pad[idx[i]][:n_vect]
         xt[batch, :i_vect, ...] = 0
                 
-        path = '/data/competition_files/%s/%s.jpg' % (imgs_dir, X[fname_idx,idx[i]])
+        path = './data/competition_files/%s/%s.jpg' % (imgs_dir, X[fname_idx,idx[i]])
 
         if a.use_images:
             xi[batch, ...] = 0.
@@ -702,7 +718,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_d
                 _img = preprocess_image(_img)
                 xi[batch, ...] = _img
             except Exception:
-                #print(path)
+                print(path)
                 pass
             
         batch += 1
@@ -735,7 +751,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_d
             
             if Y is not None:
                 assert not np.any(np.isnan(y))
-                yield(_x, np.copy(y))
+                yield(_x, [np.copy(y), (y==0)*1.])
             else:
                 yield(_x)
             ##if i == a.batch_size * 4:
@@ -757,8 +773,8 @@ if gpus > 1 : model = multi_gpu_model(model, gpus=gpus)
 cmdline = '_'.join([aa.strip().replace('models/', '') for aa in sys.argv[1:]])
 print(cmdline)
 checkpoint = ModelCheckpoint(
-    '%s/best%s-epoch{epoch:03d}-val_rmse{val_rmse:.6f}.hdf5' % (MODELS_DIR, cmdline), 
-    monitor='val_rmse', verbose=1, save_best_only=True)
+    '%s/best%s-epoch{epoch:03d}-val_rmse{val_deal_probability_rmse:.6f}.hdf5' % (MODELS_DIR, cmdline), 
+    monitor='val_deal_probability_rmse', verbose=1, save_best_only=True)
 early = EarlyStopping(patience=10, mode='min')
 reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-7, verbose=1, mode='min')
 
@@ -778,7 +794,7 @@ if not (a.test or a.test_train):
                       loss = rac_loss , metrics=[rmse, rac_loss])
     else:
         model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
-                      loss = rmse , metrics=[rmse])
+                      loss = [rmse, binary_crossentropy] , metrics={ 'deal_probability' : rmse, 'deal_zero' : binary_accuracy})
 
     idx = list(range(X.shape[1]))
     random.shuffle(idx)
