@@ -40,6 +40,7 @@ from keras.optimizers import RMSprop, Adam, SGD
 from keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 
 from iterm import show_image
+import pickle
 
 from tensorflow.python.client import device_lib
 def get_available_gpus():
@@ -91,6 +92,7 @@ parser.add_argument('-rnnc', '--rnn-channels',            type=int, default=None
 parser.add_argument('-rnncb','--rnn-channels-bottleneck', type=int, default=None, help='Number of channels of last RNN layer')
 
 parser.add_argument('-kf',   '--k-folds', type=int, default=1,    help='Evaluate model in k-folds')
+parser.add_argument('-qg', '--quantum_gravity', action='store_true', help='Quantum Gravity')
 
 parser.add_argument('-t',  '--test',       action='store_true', help='Test on test set')
 parser.add_argument('-tt', '--test-train', action='store_true', help='Test on train set')
@@ -143,6 +145,7 @@ def to_categorical_idx(col, df_trn, df_test, drop_uniques=0):
 tr_reg, te_reg, tknzr_reg    = to_categorical_idx('region', df_x_train, df_test)
 tr_pcn, te_pcn, tknzr_pcn    = to_categorical_idx('parent_category_name', df_x_train, df_test)
 tr_cn, te_cn, tknzr_cn       = to_categorical_idx('category_name', df_x_train, df_test)
+pickle.dump(tknzr_cn, open('category_name.pkl', 'wb'))
 tr_ut, te_ut, tknzr_ut       = to_categorical_idx('user_type', df_x_train, df_test)
 tr_city, te_city, tknzr_city = to_categorical_idx('city', df_x_train, df_test)
 
@@ -151,7 +154,7 @@ tr_p2, te_p2, tknzr_p2 = to_categorical_idx('param_2', df_x_train, df_test)
 tr_p3, te_p3, tknzr_p3 = to_categorical_idx('param_3', df_x_train, df_test)
 
 tr_userid, te_userid, tknzr_userid = to_categorical_idx('user_id', df_x_train, df_test, drop_uniques=a.userid_unique_threshold)
-print(f'Found {len(tknzr_userid)-1} user_ids whose value count was >= {a.userid_unique_threshold}')
+#print(f'Found {len(tknzr_userid)-1} user_ids whose value count was >= {a.userid_unique_threshold}')
 
 # In[27]:
 
@@ -266,7 +269,7 @@ if not a.char_rnn:
                 # words not found in embedding index will be all-zeros.
                 embedding_matrix[i] = embedding_vector
         #print(nonchars)
-        print(f'Words seen in corpus: {len(words_seen)} of which {len(words_seen_in_model)} have pretrained vectors ({100. * len(words_seen_in_model)/len(words_seen):.2f}%).')
+        #print(f'Words seen in corpus: {len(words_seen)} of which {len(words_seen_in_model)} have pretrained vectors ({100. * len(words_seen_in_model)/len(words_seen):.2f}%).')
     else:
         embedding_matrix = None
 else:
@@ -612,7 +615,7 @@ def pad_img_to_fit_bbox(img, x1, x2, y1, y2):
     return img, x1, x2, y1, y2
 
 
-def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_dir='train_jpg' ):
+def gen(idx,image_paths, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_dir='train_jpg' ):
     
     if a.use_images:
         load_img_fast_jpg  = lambda img_path: jpeg.JPEG(img_path).decode()
@@ -648,8 +651,18 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_d
         
         xt[batch, i_vect:, ...] = X_title_pad[idx[i]][:n_vect]
         xt[batch, :i_vect, ...] = 0
-                
-        path = f'{PATH}/data/competition_files/{imgs_dir}/{X[fname_idx,idx[i]]}.jpg'
+        if imgs_dir=='train_jpg':
+            #try:
+                #path = '/data/competition_files/{}/{}/{}/{}.jpg'.format(imgs_dir.split('_')[0],imgs_dir,str(Y[idx[i]]), X[fname_idx,idx[i]])
+            path = image_paths[idx[i]]
+            #except:
+            #    print(imgs_dir.split('_')[0])
+            #    print(imgs_dir)
+            #    print(str(Y[idx[i]]))
+            #    print( X[fname_idx,idx[i]])
+        else:
+            
+            path = image_paths[idx[i]]
 
         if a.use_images:
             xi[batch, ...] = 0.
@@ -701,32 +714,158 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_d
             #    assert False
             
             batch = 0
+
+
+
+def gen_test(idx,image_paths, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_dir='train_jpg' ):
     
+    if a.use_images:
+        load_img_fast_jpg  = lambda img_path: jpeg.JPEG(img_path).decode()
+        xi = np.empty((a.batch_size, CROP_SIZE, CROP_SIZE, 3), dtype=np.float32)
+
+    x = np.zeros((a.batch_size, X.shape[0] -1 ), dtype=np.float32)
+    fname_idx = X.shape[0] - 1 # filename is the last field in X
+    y = np.zeros((a.batch_size, 1), dtype=np.float32)
+        
+    xd = np.zeros((a.batch_size, a.maxlen_desc  ), dtype=np.float32)
+    xt = np.zeros((a.batch_size, a.maxlen_title ), dtype=np.float32)
+    
+    batch = 0
+    i = 0
+    trigger = False 
+    while True:
+        if i == len(idx):
+            i = 0
+            if not valid and (Y is not None):
+                random.shuffle(idx)
+        
+        if i == len(idx)-a.batch_size-1:
+            xd = np.zeros((len(idx)-a.batch_size, a.maxlen_desc  ), dtype=np.float32)
+            xt = np.zeros((len(idx)-a.batch_size, a.maxlen_title ), dtype=np.float32)
+            x = np.zeros((len(idx)-a.batch_size, X.shape[0] -1 ), dtype=np.float32)
+            y = np.zeros((len(idx)-a.batch_size, 1), dtype=np.float32)
+            trigger = True
+            #i = 0
+            
+            
+        x[batch,:] = X[:fname_idx,idx[i]]
+        if Y is not None:
+            y[batch,...] = Y[idx[i]]
+                
+        n_vect = X_desc_pad[idx[i]].shape[0]
+        i_vect = a.maxlen_desc - n_vect
+        xd[batch, i_vect:, ...] = X_desc_pad[idx[i]]
+        xd[batch, :i_vect, ...] = 0
+
+        n_vect = min(X_title_pad[idx[i]].shape[0], a.maxlen_title)
+        i_vect = a.maxlen_title - n_vect
+        
+        xt[batch, i_vect:, ...] = X_title_pad[idx[i]][:n_vect]
+        xt[batch, :i_vect, ...] = 0
+        if imgs_dir=='train_jpg':
+            #try:
+                #path = '/data/competition_files/{}/{}/{}/{}.jpg'.format(imgs_dir.split('_')[0],imgs_dir,str(Y[idx[i]]), X[fname_idx,idx[i]])
+            path = image_paths[idx[i]]
+            #except:
+            #    print(imgs_dir.split('_')[0])
+            #    print(imgs_dir)
+            #    print(str(Y[idx[i]]))
+            #    print( X[fname_idx,idx[i]])
+        else:
+            
+            path = image_paths[idx[i]]
+
+        if a.use_images:
+            xi[batch, ...] = 0.
+            try:
+                _img = load_img_fast_jpg(path)
+                sy, sx = _img.shape[:2]
+                max_span = 32
+                rx,ry  = np.random.randint(-max_span//2, max_span//2, 2)
+                bbox = (
+                    (sx - CROP_SIZE )// 2 + rx, (sy - CROP_SIZE )// 2 + ry, 
+                    (sx + CROP_SIZE )// 2 + rx, (sy + CROP_SIZE )// 2 + ry)
+                #show_image(_img)
+                _img = imcrop(_img, bbox)
+                _img = preprocess_image(_img)
+                xi[batch, ...] = _img
+            except Exception:
+                #print(path)
+                pass
+            
+        batch += 1
+        i     += 1
+        
+        if (batch == a.batch_size) or (trigger == True):
+
+            assert not np.any(np.isnan(x))
+            assert not np.any(np.isnan(xd))
+            assert not np.any(np.isnan(xt))
+
+            xx  = np.copy(x)
+            xxd = np.copy(xd)
+            xxt = np.copy(xt)
+
+            _x = [xx[:, 0], xx[:, 1], xx[:, 2], xx[:, 3], 
+                  xx[:, 4], xx[:, 5], xx[:, 6], xx[:, 7], 
+                  xx[:, 8], xx[:, 9], xx[:,10], xx[:,11],
+                  xxd,      xxt,      xx[:,12], xx[:,13], 
+                  xx[:,14], xx[:,15], xx[:,16], xx[:,17], 
+                  xx[:,18], xx[:,19], xx[:,20], ]
+            if a.use_images:
+                xxi = np.copy(xi)
+                _x.append( xxi)
+                            
+            if Y is not None:
+                assert not np.any(np.isnan(y))
+                yield(_x, np.copy(y))
+            else:
+                yield(_x)
+            ##if i == a.batch_size * 4:
+            #    assert False
+            
+            batch = 0
+'''    
 if a.model:
     model = load_model(a.model, compile=False)
 else:
     model = get_model()
     if a.weights:
-        print(f"Loading weights from {a.weights}")
+        print("Loading weights from %s" % a.weights)
         model.load_weights(a.weights, by_name=True, skip_mismatch=True)
 model.summary()
-if gpus > 1 : model = multi_gpu_model(model, gpus=gpus)
 
+if gpus > 1 : model = multi_gpu_model(model, gpus=gpus)
+'''
 ### callbacks
 cmdline = '_'.join([aa.strip() for aa in sys.argv[1:]])
 print(cmdline)
 checkpoint = ModelCheckpoint(
-    f'{MODELS_DIR}/best{cmdline}-epoch{{epoch:03d}}-val_rmse{{val_rmse:.6f}}.hdf5', 
+    '%s/best%s-epoch{epoch:03d}-val_rmse{val_rmse:.6f}.hdf5' % (MODELS_DIR, cmdline), 
     monitor='val_rmse', verbose=1, save_best_only=True)
 early = EarlyStopping(patience=10, mode='min')
 reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-7, verbose=1, mode='min')
 
+callbacks = [checkpoint, reduce_lr, early]
+if a.quantum_gravity:
+    from quantum_gravity_callback import QuantumGravityCallback
+    callbacks.append(QuantumGravityCallback())
 
 # In[82]:
+_b =  46 if a.use_images else 3158
+XX, XX_desc_pad, XX_title_pad, csv , bs, df, imgs_dir = \
+        X_test, te_desc_pad, te_title_pad, 'sample_submission.csv', gpus*_b//2, df_test, 'test_jpg'
 
+test_predicts_list = []
+oof_preds = np.zeros(1503424)
+train_image_path = np.load("train_image_path.npy")
+test_features = pd.read_csv('test_intermediate.csv')
+test_image_path = test_features['image_path'].values
+temp_batch_size = a.batch_size
 if not (a.test or a.test_train):
-    model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
-                  loss = rmse , metrics=[rmse])
+    
+
+    
 
     idx = list(range(X.shape[1]))
     random.shuffle(idx)
@@ -736,61 +875,101 @@ if not (a.test or a.test_train):
     model_weights_on_init = None # 
 
     for fold, (train_idx, valid_idx) in tqdm(enumerate(kf.split(idx)), total=a.k_folds):
-
-        if model_weights_on_init is None:
-            model_weights_on_init = model.get_weights()
+        a.batch_size = temp_batch_size
+        if a.model:
+            model = load_model(a.model, compile=False)
         else:
-            model.set_weights(model_weights_on_init)
+            model = get_model()
+        if a.weights:
+            print("Loading weights from %s" % a.weights)
+            model.load_weights(a.weights, by_name=True, skip_mismatch=True)
 
+        model.summary()
+        if gpus > 1 : model = multi_gpu_model(model, gpus=gpus)
+        model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate),loss = rmse , metrics=[rmse])
+        lalala = 1 
         history = model.fit_generator(
-            generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y),
+            generator        = gen(train_idx,train_image_path, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y),
             steps_per_epoch  = len(train_idx) // a.batch_size, 
-            validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y), 
+            validation_data  = gen(valid_idx,train_image_path, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y), 
             validation_steps = len(valid_idx) // a.batch_size, 
             epochs = a.max_epoch, 
-            callbacks=[checkpoint, reduce_lr, early], 
+            callbacks=callbacks, 
             verbose=1)
+        n_val = len(valid_idx)
+        os.makedirs(CSV_DIR, exist_ok=True)
+        n_test   = XX.shape[1]
+        test_idx = list(range(n_test))
+        for i in range(999,5000):
+            if n_test % i == 0:
+                _b = i
+                a.batch_size = _b 
+                print('found')
+     #   a.batch_size = bs 
+        #assert (a.batch_size % gpus)   == 0
+        #assert (n_test % a.batch_size) == 0
+        print('predicting test')
+        lalala = 0
+        print("test batch size {}".format(a.batch_size))
+        pred = model.predict_generator(
+            generator        =gen(test_idx,test_image_path, valid=False, X=XX, X_desc_pad=XX_desc_pad, X_title_pad=XX_title_pad, Y=None, imgs_dir=imgs_dir),
+            steps            = n_test // a.batch_size ,
+            verbose=1)
+        print('predicted len {}'.format(len(pred)))
+        print('predicting val')
+        print('len test {}'.format(n_test))
+        print('test len {}'.format(n_val))
+        for i in range(999,5000):
+            if n_val % i == 0:
+                _b = i
+                a.batch_size = _b
+                print('found') 
+        print("val batch size {}".format(a.batch_size))
+       
+        
+        oof_preds[valid_idx] = model.predict_generator(
+            generator        = gen(valid_idx,train_image_path, valid=False,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=None),
+            steps            = n_val // a.batch_size ,
+            verbose=1).reshape(-1)
+
+        test_predicts_list.append(pred)
 
         scores.append(history.history['val_rmse'][-1]) # last epoch
 
-    print(f"RESULTS for: {' '.join(sys.argv[0:])} => {np.mean(scores):.6f} (+/- {np.std(scores):.6f})")
+    print("RESULTS for: %s => %.6f (+/- %.6f)" % (' '.join(sys.argv[0:]), np.mean(scores), np.std(scores)))
     print('==============================================================================================')
 
 # Batch size needs to be a factor of total set (to use generator easily)
 # BS ->  508438 => Factors =>    2 ×     7 ×  23 × 1579 for test
 # BS -> 1503424 => Factors => 2**6 × 13**2 × 139        for train 
 
-if a.test:
-    _b =  46 if a.use_images else 3158
-    XX, XX_desc_pad, XX_title_pad, csv , bs, df, imgs_dir = \
-        X_test, te_desc_pad, te_title_pad, f'sample_submission.csv', gpus*_b//2, df_test, 'test_jpg'
-elif a.test_train:
-    _b = 104 if a.use_images else 4448
-    XX, XX_desc_pad, XX_title_pad, csv , bs, df, imgs_dir = \
-        X, tr_desc_pad, tr_title_pad, f'train.csv', gpus*_b//2, df_x_train, 'train_jpg'
 
-if a.test or a.test_train:
+test_predicts = np.ones(test_predicts_list[0].shape)
+for fold_predict in test_predicts_list:
+    test_predicts *= fold_predict
 
-    os.makedirs(CSV_DIR, exist_ok=True)
+test_predicts **= (1. / len(test_predicts_list))   
 
-    n_test   = XX.shape[1]
-    test_idx = list(range(n_test)) 
-    a.batch_size = bs 
-    assert (a.batch_size % gpus)   == 0
-    assert (n_test % a.batch_size) == 0
-    pred = model.predict_generator(
-        generator        = gen(test_idx, valid=False, X=XX, X_desc_pad=XX_desc_pad, X_title_pad=XX_title_pad, Y=None, imgs_dir=imgs_dir),
-        steps            = n_test // a.batch_size ,
-        verbose=1)
+filenamed = 'submit_1.csv'.format(cmdline)
+oof_file = 'oof_andes_1.npy'
+test_ppred = 'test_andes_1.npy'
+ii = 2
+while os.path.exists(oof_file):
+    filenamed = 'submit_{}.csv'.format(ii, cmdline)
+    oof_file = 'oof_andes_{}.npy'.format(ii)
+    test_ppred = 'test_andes_{}.npy'.format(ii)
+    ii +=1
 
-    subm = pd.read_csv(csv)
-    assert np.all(subm['item_id'] == df['item_id']) # order right?
-    df['deal_probability_ref'] = subm['deal_probability']
-    subm['deal_probability'] = pred
-    subm.to_csv(f'test-{cmdline}.csv', index=False)
 
-    diff=(subm['deal_probability']-df['deal_probability_ref']).values
-    _rmse = np.sqrt(np.mean(diff**2))
-    print(f"RMSE test-{cmdline}.csv vs reference {csv} is {_rmse}")
+np.save(oof_file,oof_preds)
+np.save(test_ppred,test_predicts)
+
+subm = pd.read_csv(csv)
+assert np.all(subm['item_id'] == df['item_id']) # order right?
+df['deal_probability_ref'] = subm['deal_probability']
+subm['deal_probability'] = test_predicts
+
+subm.to_csv(cmdline+"_"+filenamed, index=False)
+ 
 
 
