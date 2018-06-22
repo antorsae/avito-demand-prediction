@@ -61,7 +61,6 @@ parser.add_argument('-b',   '--batch-size', type=int, default=None, help='Batch 
 parser.add_argument('-g',   '--gpus', type=int, default=None, help='GPUs')
 parser.add_argument('-l',   '--learning-rate', type=float, default=1e-3, help='Initial learning rate')
 parser.add_argument('-nbn', '--no-batchnorm', action='store_true', help='Do NOT use batch norm')
-parser.add_argument('-do',  '--dropout', type=float, default=0, help='Dropout rate')
 parser.add_argument('-af',  '--activation-function', default='relu', help='Activation function to use (relu|prelu), e.g. -af prelu')
 
 parser.add_argument('-m', '--model',   help='load hdf5 model (and continue training)')
@@ -73,7 +72,10 @@ parser.add_argument('-fw',  '--ft-words',            type=int, default=50000, he
 parser.add_argument('-ftm', '--fasttext-model',      default='avito.ru.300.bin', help='FastText model (for pretrained text embeddings)')
 
 parser.add_argument('-fc',   '--fully-connected-layers', nargs='+', type=int, default=[512], help='Specify last FC layers, e.g. -fc 1024 512 256')
+parser.add_argument('-do',  '--dropout', type=float, default=0, help='Dropout rate')
+
 parser.add_argument('-dzfc', '--deal-zero-fully-connected-layers', nargs='+', type=int, default=[2048, 1024, 512, 256, 128, 64, 32], help='Specify deal zero FC layers, e.g. -fc 1024 512 256')
+parser.add_argument('-dzdo',  '--deal-zero-dropout', type=float, default=0, help='Dropout rate for deal zero FC layers')
 
 parser.add_argument('-me',  '--max-emb', type=int, default=64, help='Maximum size of embedding vectors for categorical features')
 
@@ -610,27 +612,25 @@ def get_model():
                 #if do > 0.: image_features = Dropout(do)(image_features)
         conc_desc = concatenate([conc_desc, image_features], axis=-1)
 
-    for fcl in a.fully_connected_layers:
-        conc_desc = Dense(fcl)(conc_desc)
-        if bn: conc_desc = BatchNormalization()(conc_desc)
-        conc_desc = act_fn(**act_pa)(conc_desc)
-        if do > 0.: conc_desc = Dropout(do)(conc_desc)
+    for i, fcl in enumerate(a.fully_connected_layers):
+        deal_probability_head = Dense(fcl)(deal_probability_head if i > 0 else conc_desc)
+        if bn: deal_probability_head = BatchNormalization()(deal_probability_head)
+        deal_probability_head = act_fn(**act_pa)(deal_probability_head)
+        if do > 0.: deal_probability_head = Dropout(do)(deal_probability_head)
 
     # 0/1 HEAD
-    class_01_head = conc_desc
-    for fcl in a.deal_zero_fully_connected_layers:
-        class_01_head = Dense(fcl)(class_01_head)
-        if bn: class_01_head = BatchNormalization()(class_01_head)
-        class_01_head = act_fn(**act_pa)(class_01_head)
-        if do > 0.: class_01_head = Dropout(do)(class_01_head)
-
+    for i, fcl in enumerate(a.deal_zero_fully_connected_layers):
+        deal_zero_head = Dense(fcl)(deal_zero_head if i > 0 else conc_desc)
+        if bn: deal_zero_head = BatchNormalization()(deal_zero_head)
+        deal_zero_head = act_fn(**act_pa)(deal_zero_head)
+        if a.deal_zero_dropout > 0.: deal_zero_head = Dropout(a.deal_zero_dropout)(deal_zero_head)  
 
     if a.regression_as_classification:
-        deal_probability = Dense(N_CLASSES, activation='softmax', name='deal_probability')(conc_desc)
+        deal_probability = Dense(N_CLASSES, activation='softmax', name='deal_probability')(deal_probability_head)
     else:
-        deal_probability = Dense(1, activation='sigmoid', name='deal_probability')(conc_desc)
+        deal_probability = Dense(1, activation='sigmoid', name='deal_probability')(deal_probability_head)
 
-    deal_zero = Dense(1, activation='sigmoid', name='deal_zero')(class_01_head)
+    deal_zero = Dense(1, activation='sigmoid', name='deal_zero')(deal_zero_head)
 
     inputs = [
         inp_reg,              inp_pcn,               inp_cn,               inp_ut, 
