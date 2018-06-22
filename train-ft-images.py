@@ -166,6 +166,8 @@ tr_p2, te_p2, tknzr_p2 = to_categorical_idx('param_2', df_x_train, df_test)
 tr_p3, te_p3, tknzr_p3 = to_categorical_idx('param_3', df_x_train, df_test)
 
 tr_userid, te_userid, tknzr_userid = to_categorical_idx('user_id', df_x_train, df_test, drop_uniques=a.userid_unique_threshold)
+
+tr_geoid, te_geoid, tknzr_geoid = to_categorical_idx('lat_lon_hdbscan_cluster_05_03', df_x_train, df_test)
 #print(f'Found {len(tknzr_userid)-1} user_ids whose value count was >= {a.userid_unique_threshold}')
 
 # In[27]:
@@ -319,6 +321,7 @@ config.len_p1    = len(tknzr_p1)
 config.len_p2    = len(tknzr_p2)
 config.len_p3    = len(tknzr_p3)
 config.len_userid= len(tknzr_userid)
+config.len_geoid = len(tknzr_geoid)
 
 # In[40]:
 
@@ -334,7 +337,7 @@ config.emb_p1    = min(a.max_emb,(config.len_p1    + 1)//2)
 config.emb_p2    = min(a.max_emb,(config.len_p2    + 1)//2)
 config.emb_p3    = min(a.max_emb,(config.len_p3    + 1)//2)
 config.emb_userid= min(a.max_emb,(config.len_userid+ 1)//2) 
-
+config.emb_geoid = min(a.max_emb,(config.len_geoid + 1)//2) 
 
 # In[41]:
 
@@ -344,7 +347,7 @@ X      = np.array([
     tr_p2,               tr_p3,                tr_price,            tr_itemseq, 
     tr_avg_days_up_user, tr_avg_times_up_user, tr_min_days_up_user, tr_min_times_up_user, 
     tr_max_days_up_user, tr_max_times_up_user, tr_n_user_items,     tr_has_price, 
-    tr_userid,           df_x_train['image'].values])
+    tr_userid,           tr_geoid,             df_x_train['image'].values])
 
 X_test = np.array([
     te_reg,              te_pcn,               te_cn,               te_ut,      
@@ -352,7 +355,7 @@ X_test = np.array([
     te_p2,               te_p3,                te_price,            te_itemseq, 
     te_avg_days_up_user, te_avg_times_up_user, te_min_days_up_user, te_min_times_up_user, 
     te_max_days_up_user, te_max_times_up_user, te_n_user_items,     te_has_price, 
-    te_userid,           df_test['image'].values])
+    te_userid,           te_geoid,             df_test['image'].values])
 
 Y = df_y_train['deal_probability'].values
 
@@ -525,8 +528,11 @@ def get_model():
     inp_userid = Input(shape=(1, ), name='inp_userid')
     emb_userid = Embedding(config.len_userid, config.emb_userid, name='emb_userid')(inp_userid)
 
+    inp_geoid = Input(shape=(1, ), name='inp_geoid')
+    emb_geoid = Embedding(config.len_geoid, config.emb_geoid, name='emb_geoid')(inp_geoid)
+
     conc_cate = concatenate([emb_reg, emb_pcn,  emb_cn, emb_ut, emb_city, emb_week, emb_imgt1, 
-                             emb_p1, emb_p2, emb_p3, emb_userid,
+                             emb_p1, emb_p2, emb_p3, emb_userid, emb_geoid,
                              ], 
                             axis=-1, name='concat_categorical_vars')
     
@@ -638,7 +644,7 @@ def get_model():
         inp_p2,               inp_p3,                inp_price,            inp_itemseq, 
         inp_desc,             inp_title,             inp_avg_days_up_user, inp_avg_times_up_user, 
         inp_min_days_up_user, inp_min_times_up_user, inp_max_days_up_user, inp_max_times_up_user, 
-        inp_n_user_items,     inp_has_price,         inp_userid,
+        inp_n_user_items,     inp_has_price,         inp_userid,           inp_geoid,
     ]
     
     if a.use_images:
@@ -739,7 +745,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_d
                   xx[:, 8], xx[:, 9], xx[:,10], xx[:,11],
                   xxd,      xxt,      xx[:,12], xx[:,13], 
                   xx[:,14], xx[:,15], xx[:,16], xx[:,17], 
-                  xx[:,18], xx[:,19], xx[:,20], ]
+                  xx[:,18], xx[:,19], xx[:,20], xx[:,21],]
             if a.use_images:
                 xxi = np.copy(xi)
                 _x.append( xxi)
