@@ -795,6 +795,7 @@ if not (a.test or a.test_train):
                 model_weights_on_init = model.get_weights()
             else:
                 model.set_weights(model_weights_on_init)
+                K.set_value(model.optimizer.lr, a.learning_rate)
 
             history = model.fit_generator(
                 generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y),
