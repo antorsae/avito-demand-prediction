@@ -850,7 +850,7 @@ if a.test:
 elif a.test_train:
     _b = 104 if a.use_images else 4448
     XX, XX_desc_pad, XX_title_pad, csv , bs, df, imgs_dir = \
-        X, tr_desc_pad, tr_title_pad, 'train.csv', gpus*_b//2, df_x_train, 'train_jpg'
+        X, tr_desc_pad, tr_title_pad, 'train_submission.csv', gpus*_b//2, df_x_train, 'train_jpg'
 
 if a.test or a.test_train:
 
