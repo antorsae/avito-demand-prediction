@@ -819,10 +819,10 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
                 #del xxif
 
 
-            if a.aug:
+            if a.aug and np.random.rand > 0.75:
                 if not valid and (Y is not None):
                     for j in range(23):
-                        _x[j] *= np.random.uniform(0.95,1.05)
+                        _x[j] *= np.random.uniform(0.99,1.01)
             #del xx
             #del xxt
 
