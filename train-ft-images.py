@@ -816,15 +816,15 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
             if a.use_image_features:
                 xxif = np.copy(xif)
                 _x.append(xxif)
-                del xxif
+                #del xxif
 
 
             if a.aug:
                 if not valid and (Y is not None):
                     for j in range(23):
                         _x[j] *= np.random.uniform(0.95,1.05)
-            del xx
-            del xxt
+            #del xx
+            #del xxt
 
             if Y is not None:
                 assert not np.any(np.isnan(y))
