@@ -55,6 +55,12 @@ MODELS_DIR = 'models'
 CSV_DIR = 'csv'
 os.makedirs(MODELS_DIR, exist_ok=True)
 
+tf=K.tf
+config = tf.ConfigProto()
+config.gpu_options.allow_growth = True
+sess = tf.Session(config=config)
+K.set_session(sess)
+
 parser = argparse.ArgumentParser()
 parser.add_argument('-mep', '--max-epoch',  type=int, default=200, help='Epoch to run')
 parser.add_argument('-b',   '--batch-size', type=int, default=None, help='Batch Size during training, e.g. -b 2')
@@ -102,6 +108,7 @@ parser.add_argument('-qg', '--quantum_gravity', action='store_true', help='Quant
 parser.add_argument('-opt', '--opt', action='store_true', help='Experimental Optimizer')
 parser.add_argument('-aug', '--aug', action='store_true', help='Use augmentation')
 parser.add_argument('-rac', '--regression-as-classification', action='store_true', help='Regression as classification problem')
+parser.add_argument('-uif', '--use-image-features', action='store_true')
 
 parser.add_argument('-t',  '--test',       action='store_true', help='Test on test set')
 parser.add_argument('-tt', '--test-train', action='store_true', help='Test on train set')
@@ -128,6 +135,11 @@ random.seed(SEED)
 df_x_train = pd.read_feather('df_x_train')
 df_y_train = pd.read_feather('df_y_train')
 df_test    = pd.read_feather('df_test')
+
+f_train, f_test = None, None
+if a.use_image_features:
+    f_train = np.lib.format.open_memmap('train.npy', mode='c')
+    #f_test = np.lib.format.open_memmap('test.npy', mode='c')
 
 # In[24]:
 
@@ -367,36 +379,73 @@ gc.collect()
 
 #from keras_contrib.layers.normalization import InstanceNormalization
 
+def dice_loss(y_true, y_pred):
+    smooth = 1.
+    y_true_f = K.flatten(y_true)
+    y_pred_f = K.flatten(y_pred)
+    intersection = K.sum(y_true_f * y_pred_f)
+    return (2. * intersection + smooth) / (
+        K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
+
 ### rmse loss for keras
 def rmse(y_true, y_pred):
     if a.regression_as_classification:
         y_pred = K.cast(K.argmax(y_pred, axis=1), 'float32') / (N_CLASSES - 1.0)
     return K.sqrt(K.mean(K.square(y_pred - y_true), axis=None))
 
-def rac_loss(y_true, y_pred):
+def rac_loss_old(y_true, y_pred):
     # y_true = single float
     # y_pred = softmax layer
     tf = K.tf
-    stack = tf.constant(np.stack((np.arange(N_CLASSES))
-                        for i in range(a.batch_size)), dtype=tf.int32)
+    y_pred = tf.norm(tf.nn.relu(y_pred))
 
-    stack = tf.convert_to_tensor(stack, dtype=tf.int32)
-    ones = tf.ones([a.batch_size, N_CLASSES], dtype=tf.int32)
+    stack = tf.constant(np.stack((np.arange(N_CLASSES)*1.0)
+                        for i in range(a.batch_size)), dtype=tf.float32)
 
-    y_true = tf.cast(y_true * tf.convert_to_tensor((N_CLASSES - 1), dtype=tf.float32), tf.int32)
+    stack = tf.convert_to_tensor(stack, dtype=tf.float32)
+    ones = tf.ones([a.batch_size, N_CLASSES], dtype=tf.float32)
+
+    y_true = y_true * tf.convert_to_tensor((N_CLASSES - 1), dtype=tf.float32)
     matrix = ones * y_true
     print(matrix.get_shape())
 
-    distance = tf.abs(stack - matrix)
-    distance = tf.cast(distance, dtype=tf.float32)
+    distance = tf.convert_to_tensor(N_CLASSES, dtype=tf.float32) - tf.abs(stack - matrix)
+    #distance = tf.cast(distance, dtype=tf.float32)
 
     p1 = tf.log(y_pred + tf.convert_to_tensor(tf.constant(1e-10), dtype=tf.float32))
-    p2 = tf.exp(-distance / tf.convert_to_tensor(3.0, dtype=tf.float32))
+    p2 = tf.exp(-distance / tf.convert_to_tensor(100.0, dtype=tf.float32))
     p3 = p1*p2
-    loss = -tf.reduce_sum(p3)
+    #p4 = tf.log(1.0 - y_pred + tf.convert_to_tensor(tf.constant(1e-10), dtype=tf.float32))
+    #p5 = tf.convert_to_tensor(1.0, dtype=tf.float32) - tf.exp(-distance / tf.convert_to_tensor(100.0, dtype=tf.float32))
+    #p6 = p5 * p4
+    loss = tf.reduce_mean(-tf.reduce_sum(p3, 1))
 
     return loss
 
+def rac_loss(y_true, y_pred):
+    tf = K.tf
+    stack = tf.constant(np.stack((np.arange(N_CLASSES)*1.0)
+                        for i in range(a.batch_size)), dtype=tf.float32)
+
+    stack = tf.convert_to_tensor(stack, dtype=tf.float32)
+    ones = tf.ones([a.batch_size, N_CLASSES], dtype=tf.float32)
+
+    y_true = y_true * tf.convert_to_tensor((N_CLASSES - 1), dtype=tf.float32)
+    matrix = ones * y_true
+    print(matrix.get_shape())
+
+    distance = tf.convert_to_tensor(N_CLASSES, dtype=tf.float32) - tf.abs(stack - matrix)
+    distance = tf.exp(-distance / tf.convert_to_tensor(3.0, dtype=tf.float32))
+    distance = tf.nn.softmax(distance)
+
+    
+    loss = dice_loss(distance, y_pred)
+    #p1 = tf.log(y_pred + tf.convert_to_tensor(tf.constant(1e-10), dtype=tf.float32))
+    #p2 = distance
+    #p3 = p1*p2
+
+    #loss = tf.reduce_mean(-tf.reduce_sum(p3, 1))
+    return 1.0- loss
 # In[46]:
 
 
@@ -618,6 +667,10 @@ def get_model():
                 #if do > 0.: image_features = Dropout(do)(image_features)
         conc_desc = concatenate([conc_desc, image_features], axis=-1)
 
+    if a.use_image_features:
+        inp_img_f = Input(shape=(3067,), name='inp_img_f')
+        conc_desc = concatenate([conc_desc, inp_img_f], axis=-1)
+
     for i, fcl in enumerate(a.fully_connected_layers):
         deal_probability_head = Dense(fcl)(deal_probability_head if i > 0 else conc_desc)
         if bn: deal_probability_head = BatchNormalization()(deal_probability_head)
@@ -649,8 +702,12 @@ def get_model():
     
     if a.use_images:
         inputs.append(inp_image)
-            
+
+    if a.use_image_features:
+        inputs.append(inp_img_f)
+
     model = Model(inputs = inputs, outputs = [deal_probability, deal_zero])
+
     return model
 
 # In[79]:
@@ -670,11 +727,14 @@ def pad_img_to_fit_bbox(img, x1, x2, y1, y2):
     return img, x1, x2, y1, y2
 
 
-def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_dir='train_jpg' ):
+def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=None,imgs_dir='train_jpg' ):
     
     if a.use_images:
         load_img_fast_jpg  = lambda img_path: jpeg.JPEG(img_path).decode()
         xi = np.empty((a.batch_size, CROP_SIZE, CROP_SIZE, 3), dtype=np.float32)
+
+    if a.use_image_features:
+        xif = np.empty((a.batch_size, 3067), dtype=np.float32)
 
     x = np.zeros((a.batch_size, X.shape[0] -1 ), dtype=np.float32)
     fname_idx = X.shape[0] - 1 # filename is the last field in X
@@ -726,7 +786,9 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_d
             except Exception:
                 print(path)
                 pass
-            
+        if a.use_image_features:
+            xif[batch, ...] = X_f[idx[i]]
+
         batch += 1
         i     += 1
         
@@ -750,11 +812,20 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None,Y=None,imgs_d
                 xxi = np.copy(xi)
                 _x.append( xxi)
 
-            if a.aug:
+
+            if a.use_image_features:
+                xxif = np.copy(xif)
+                _x.append(xxif)
+                #del xxif
+
+
+            if a.aug and np.random.rand > 0.75:
                 if not valid and (Y is not None):
                     for j in range(23):
-                        _x[j] *= np.random.uniform(0.95,1.05)
-            
+                        _x[j] *= np.random.uniform(0.99,1.01)
+            #del xx
+            #del xxt
+
             if Y is not None:
                 assert not np.any(np.isnan(y))
                 yield(_x, [np.copy(y), (y==0)*1.])
@@ -820,9 +891,9 @@ if not (a.test or a.test_train):
                 K.set_value(model.optimizer.lr, a.learning_rate)
 
             history = model.fit_generator(
-                generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y),
+                generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y),
                 steps_per_epoch  = len(train_idx) // a.batch_size, 
-                validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y), 
+                validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y), 
                 validation_steps = len(valid_idx) // a.batch_size, 
                 epochs = a.max_epoch, 
                 callbacks=callbacks, 
@@ -848,9 +919,9 @@ if not (a.test or a.test_train):
         train_idx = list(df_y_train[np.invert(df_y_train.index.isin(valid_idx))].index)
 
         model.fit_generator(
-            generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y),
+            generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y),
             steps_per_epoch  = len(train_idx) // a.batch_size, 
-            validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, Y=Y), 
+            validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y), 
             validation_steps = len(valid_idx) // a.batch_size, 
             epochs = a.max_epoch, 
             callbacks=callbacks, 
@@ -864,10 +935,12 @@ if a.test:
     _b =  46 if a.use_images else 3158
     XX, XX_desc_pad, XX_title_pad, csv , bs, df, imgs_dir = \
         X_test, te_desc_pad, te_title_pad, 'sample_submission.csv', gpus*_b//2, df_test, 'test_jpg'
+    XX_f = f_test
 elif a.test_train:
     _b = 104 if a.use_images else 4448
     XX, XX_desc_pad, XX_title_pad, csv , bs, df, imgs_dir = \
         X, tr_desc_pad, tr_title_pad, 'train_submission.csv', gpus*_b//2, df_x_train, 'train_jpg'
+    XX_f = f_test
 
 if a.test or a.test_train:
 
@@ -879,7 +952,7 @@ if a.test or a.test_train:
     assert (a.batch_size % gpus)   == 0
     assert (n_test % a.batch_size) == 0
     pred = model.predict_generator(
-        generator        = gen(test_idx, valid=False, X=XX, X_desc_pad=XX_desc_pad, X_title_pad=XX_title_pad, Y=None, imgs_dir=imgs_dir),
+        generator        = gen(test_idx, valid=False, X=XX, X_desc_pad=XX_desc_pad, X_title_pad=XX_title_pad, X_f=XX_f, Y=None, imgs_dir=imgs_dir),
         steps            = n_test // a.batch_size ,
         verbose=1)
 
