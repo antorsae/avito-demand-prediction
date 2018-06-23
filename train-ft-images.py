@@ -784,7 +784,7 @@ checkpoint = ModelCheckpoint(
 early = EarlyStopping(patience=10, mode='min')
 reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-7, verbose=1, mode='min')
 
-callbacks = [checkpoint, reduce_lr, early]
+callbacks = [checkpoint, reduce_lr, early] if a.k_folds <= 1 else [reduce_lr]
 if a.quantum_gravity:
     from quantum_gravity_callback import QuantumGravityCallback
     callbacks.append(QuantumGravityCallback())
@@ -828,7 +828,18 @@ if not (a.test or a.test_train):
                 callbacks=callbacks, 
                 verbose=1)
 
-            scores.append(history.history['val_deal_probability_rmse'][-1]) # last epoch
+            val_rmse = history.history['val_deal_probability_rmse'][-1]
+
+            model.save('{}/best{}-fold{:d}of{:d}-epoch{:03d}-val_rmse{:.6f}.hdf5'.format(
+                MODELS_DIR,
+                cmdline,
+                fold+1,
+                a.k_folds,
+                a.max_epoch,
+                val_rmse,
+                 ))
+
+            scores.append(val_rmse) # last epoch
 
         print("RESULTS for: %s => %.6f (+/- %.6f)" % (' '.join(sys.argv[0:]), np.mean(scores), np.std(scores)))
         print('==============================================================================================')
