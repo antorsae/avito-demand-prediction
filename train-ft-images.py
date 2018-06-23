@@ -27,11 +27,12 @@ from multi_gpu_keras import multi_gpu_model
 from sklearn.model_selection import KFold
 
 from keras.layers import Input, Embedding, Dense, BatchNormalization, Activation, Dropout, PReLU
-from keras.layers import GlobalMaxPool1D, GlobalMaxPool2D, GlobalAveragePooling1D, GlobalMaxPooling1D
+from keras.layers import GlobalMaxPool1D, GlobalMaxPool2D, GlobalAveragePooling1D, GlobalMaxPooling1D, SpatialDropout1D
 from keras.layers import concatenate, Flatten
 from keras.layers import LSTM, CuDNNGRU, CuDNNLSTM, GRU, Bidirectional, Conv1D
 from keras.models import Model, load_model
-from keras.losses import mean_squared_error
+from keras.losses import mean_squared_error, binary_crossentropy
+from keras.metrics import binary_accuracy
 from keras.applications import *
 import jpeg4py as jpeg
 from keras import backend as K
@@ -66,7 +67,6 @@ parser.add_argument('-b',   '--batch-size', type=int, default=None, help='Batch 
 parser.add_argument('-g',   '--gpus', type=int, default=None, help='GPUs')
 parser.add_argument('-l',   '--learning-rate', type=float, default=1e-3, help='Initial learning rate')
 parser.add_argument('-nbn', '--no-batchnorm', action='store_true', help='Do NOT use batch norm')
-parser.add_argument('-do',  '--dropout', type=float, default=0, help='Dropout rate')
 parser.add_argument('-af',  '--activation-function', default='relu', help='Activation function to use (relu|prelu), e.g. -af prelu')
 
 parser.add_argument('-m', '--model',   help='load hdf5 model (and continue training)')
@@ -77,7 +77,11 @@ parser.add_argument('-fp',  '--finetune-pretrained', action='store_true', help='
 parser.add_argument('-fw',  '--ft-words',            type=int, default=50000, help='Number of most frequent words (tokens) to finetune')
 parser.add_argument('-ftm', '--fasttext-model',      default='avito.ru.300.bin', help='FastText model (for pretrained text embeddings)')
 
-parser.add_argument('-fc', '--fully-connected-layers', nargs='+', type=int, default=[512], help='Specify last FC layers, e.g. -fc 1024 512 256')
+parser.add_argument('-fc',   '--fully-connected-layers', nargs='+', type=int, default=[512], help='Specify last FC layers, e.g. -fc 1024 512 256')
+parser.add_argument('-do',  '--dropout', type=float, default=0, help='Dropout rate')
+
+parser.add_argument('-dzfc', '--deal-zero-fully-connected-layers', nargs='+', type=int, default=[2048, 1024, 512, 256, 128, 64, 32], help='Specify deal zero FC layers, e.g. -fc 1024 512 256')
+parser.add_argument('-dzdo',  '--deal-zero-dropout', type=float, default=0, help='Dropout rate for deal zero FC layers')
 
 parser.add_argument('-me',  '--max-emb', type=int, default=64, help='Maximum size of embedding vectors for categorical features')
 
@@ -94,9 +98,10 @@ parser.add_argument('-mlt', '--maxlen-title', type=int, default= 16, help='')
 parser.add_argument('-mld', '--maxlen-desc',  type=int, default=256, help='')
 parser.add_argument('-et',  '--emb-text',     type=int, default=300, help='')
 
-parser.add_argument('-rnnl', '--rnn-layers',              type=int, default=1,    help='Number of RNN (GRU) layers')
-parser.add_argument('-rnnc', '--rnn-channels',            type=int, default=None, help='Number of channels of first RNN layers')
-parser.add_argument('-rnncb','--rnn-channels-bottleneck', type=int, default=None, help='Number of channels of last RNN layer')
+parser.add_argument('-rnnl', '--rnn-layers',              type=int,   default=1,    help='Number of RNN (GRU) layers')
+parser.add_argument('-rnnc', '--rnn-channels',            type=int,   default=None, help='Number of channels of first RNN layers')
+parser.add_argument('-rnncb','--rnn-channels-bottleneck', type=int,   default=None, help='Number of channels of last RNN layer')
+parser.add_argument('-rnndo','--rnn-dropout',             type=float, default=0.,   help='Spatial dropout to apply before RNN layer')
 
 parser.add_argument('-kf',   '--k-folds', type=int, default=1,    help='Evaluate model in k-folds')
 parser.add_argument('-qg', '--quantum_gravity', action='store_true', help='Quantum Gravity')
@@ -173,6 +178,8 @@ tr_p2, te_p2, tknzr_p2 = to_categorical_idx('param_2', df_x_train, df_test)
 tr_p3, te_p3, tknzr_p3 = to_categorical_idx('param_3', df_x_train, df_test)
 
 tr_userid, te_userid, tknzr_userid = to_categorical_idx('user_id', df_x_train, df_test, drop_uniques=a.userid_unique_threshold)
+
+tr_geoid, te_geoid, tknzr_geoid = to_categorical_idx('lat_lon_hdbscan_cluster_05_03', df_x_train, df_test)
 #print(f'Found {len(tknzr_userid)-1} user_ids whose value count was >= {a.userid_unique_threshold}')
 
 # In[27]:
@@ -326,6 +333,7 @@ config.len_p1    = len(tknzr_p1)
 config.len_p2    = len(tknzr_p2)
 config.len_p3    = len(tknzr_p3)
 config.len_userid= len(tknzr_userid)
+config.len_geoid = len(tknzr_geoid)
 
 # In[40]:
 
@@ -341,7 +349,7 @@ config.emb_p1    = min(a.max_emb,(config.len_p1    + 1)//2)
 config.emb_p2    = min(a.max_emb,(config.len_p2    + 1)//2)
 config.emb_p3    = min(a.max_emb,(config.len_p3    + 1)//2)
 config.emb_userid= min(a.max_emb,(config.len_userid+ 1)//2) 
-
+config.emb_geoid = min(a.max_emb,(config.len_geoid + 1)//2) 
 
 # In[41]:
 
@@ -351,7 +359,7 @@ X      = np.array([
     tr_p2,               tr_p3,                tr_price,            tr_itemseq, 
     tr_avg_days_up_user, tr_avg_times_up_user, tr_min_days_up_user, tr_min_times_up_user, 
     tr_max_days_up_user, tr_max_times_up_user, tr_n_user_items,     tr_has_price, 
-    tr_userid,           df_x_train['image'].values])
+    tr_userid,           tr_geoid,             df_x_train['image'].values])
 
 X_test = np.array([
     te_reg,              te_pcn,               te_cn,               te_ut,      
@@ -359,7 +367,7 @@ X_test = np.array([
     te_p2,               te_p3,                te_price,            te_itemseq, 
     te_avg_days_up_user, te_avg_times_up_user, te_min_days_up_user, te_min_times_up_user, 
     te_max_days_up_user, te_max_times_up_user, te_n_user_items,     te_has_price, 
-    te_userid,           df_test['image'].values])
+    te_userid,           te_geoid,             df_test['image'].values])
 
 Y = df_y_train['deal_probability'].values
 
@@ -569,8 +577,11 @@ def get_model():
     inp_userid = Input(shape=(1, ), name='inp_userid')
     emb_userid = Embedding(config.len_userid, config.emb_userid, name='emb_userid')(inp_userid)
 
+    inp_geoid = Input(shape=(1, ), name='inp_geoid')
+    emb_geoid = Embedding(config.len_geoid, config.emb_geoid, name='emb_geoid')(inp_geoid)
+
     conc_cate = concatenate([emb_reg, emb_pcn,  emb_cn, emb_ut, emb_city, emb_week, emb_imgt1, 
-                             emb_p1, emb_p2, emb_p3, emb_userid,
+                             emb_p1, emb_p2, emb_p3, emb_userid, emb_geoid,
                              ], 
                             axis=-1, name='concat_categorical_vars')
     
@@ -624,9 +635,11 @@ def get_model():
 
     inp_desc = Input(shape=(a.maxlen_desc, ), name='inp_desc')
     emb_desc = embedding_text(inp_desc)
+    if a.rnn_dropout > 0.: emb_desc = SpatialDropout1D(a.rnn_dropout)(emb_desc)
     
     inp_title = Input(shape=(a.maxlen_title, ), name='inp_title')
     emb_title = embedding_text(inp_title)
+    if a.rnn_dropout > 0.: emb_title = SpatialDropout1D(a.rnn_dropout)(emb_title)
 
     desc_layer = emb_desc
     for _ in range(a.rnn_layers):
@@ -658,16 +671,25 @@ def get_model():
         inp_img_f = Input(shape=(3067,), name='inp_img_f')
         conc_desc = concatenate([conc_desc, inp_img_f], axis=-1)
 
-    for fcl in a.fully_connected_layers:
-        conc_desc = Dense(fcl)(conc_desc)
-        if bn: conc_desc = BatchNormalization()(conc_desc)
-        conc_desc = act_fn(**act_pa)(conc_desc)
-        if do > 0.: conc_desc = Dropout(do)(conc_desc)
+    for i, fcl in enumerate(a.fully_connected_layers):
+        deal_probability_head = Dense(fcl)(deal_probability_head if i > 0 else conc_desc)
+        if bn: deal_probability_head = BatchNormalization()(deal_probability_head)
+        deal_probability_head = act_fn(**act_pa)(deal_probability_head)
+        if do > 0.: deal_probability_head = Dropout(do)(deal_probability_head)
+
+    # 0/1 HEAD
+    for i, fcl in enumerate(a.deal_zero_fully_connected_layers):
+        deal_zero_head = Dense(fcl)(deal_zero_head if i > 0 else conc_desc)
+        if bn: deal_zero_head = BatchNormalization()(deal_zero_head)
+        deal_zero_head = act_fn(**act_pa)(deal_zero_head)
+        if a.deal_zero_dropout > 0.: deal_zero_head = Dropout(a.deal_zero_dropout)(deal_zero_head)  
 
     if a.regression_as_classification:
-        outp = Dense(N_CLASSES, activation='softmax', name='output')(conc_desc)
+        deal_probability = Dense(N_CLASSES, activation='softmax', name='deal_probability')(deal_probability_head)
     else:
-        outp = Dense(1, activation='sigmoid', name='output')(conc_desc)
+        deal_probability = Dense(1, activation='sigmoid', name='deal_probability')(deal_probability_head)
+
+    deal_zero = Dense(1, activation='sigmoid', name='deal_zero')(deal_zero_head)
 
     inputs = [
         inp_reg,              inp_pcn,               inp_cn,               inp_ut, 
@@ -675,7 +697,7 @@ def get_model():
         inp_p2,               inp_p3,                inp_price,            inp_itemseq, 
         inp_desc,             inp_title,             inp_avg_days_up_user, inp_avg_times_up_user, 
         inp_min_days_up_user, inp_min_times_up_user, inp_max_days_up_user, inp_max_times_up_user, 
-        inp_n_user_items,     inp_has_price,         inp_userid,
+        inp_n_user_items,     inp_has_price,         inp_userid,           inp_geoid,
     ]
     
     if a.use_images:
@@ -684,7 +706,8 @@ def get_model():
     if a.use_image_features:
         inputs.append(inp_img_f)
 
-    model = Model(inputs = inputs, outputs = outp)
+    model = Model(inputs = inputs, outputs = [deal_probability, deal_zero])
+
     return model
 
 # In[79]:
@@ -744,7 +767,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
         xt[batch, i_vect:, ...] = X_title_pad[idx[i]][:n_vect]
         xt[batch, :i_vect, ...] = 0
                 
-        path = '/home/pavel/data/competition_files/%s/%s.jpg' % (imgs_dir, X[fname_idx,idx[i]])
+        path = './data/competition_files/%s/%s.jpg' % (imgs_dir, X[fname_idx,idx[i]])
 
         if a.use_images:
             xi[batch, ...] = 0.
@@ -761,7 +784,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
                 _img = preprocess_image(_img)
                 xi[batch, ...] = _img
             except Exception:
-                #print(path)
+                print(path)
                 pass
         if a.use_image_features:
             xif[batch, ...] = X_f[idx[i]]
@@ -784,7 +807,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
                   xx[:, 8], xx[:, 9], xx[:,10], xx[:,11],
                   xxd,      xxt,      xx[:,12], xx[:,13], 
                   xx[:,14], xx[:,15], xx[:,16], xx[:,17], 
-                  xx[:,18], xx[:,19], xx[:,20], ]
+                  xx[:,18], xx[:,19], xx[:,20], xx[:,21],]
             if a.use_images:
                 xxi = np.copy(xi)
                 _x.append( xxi)
@@ -805,7 +828,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
 
             if Y is not None:
                 assert not np.any(np.isnan(y))
-                yield(_x, np.copy(y))
+                yield(_x, [np.copy(y), (y==0)*1.])
             else:
                 yield(_x)
             ##if i == a.batch_size * 4:
@@ -827,12 +850,12 @@ if gpus > 1 : model = multi_gpu_model(model, gpus=gpus)
 cmdline = '_'.join([aa.strip().replace('models/', '') for aa in sys.argv[1:]])
 print(cmdline)
 checkpoint = ModelCheckpoint(
-    '%s/best%s-epoch{epoch:03d}-val_rmse{val_rmse:.6f}.hdf5' % (MODELS_DIR, cmdline), 
-    monitor='val_rmse', verbose=1, save_best_only=True)
+    '%s/best%s-epoch{epoch:03d}-val_rmse{val_deal_probability_rmse:.6f}.hdf5' % (MODELS_DIR, cmdline), 
+    monitor='val_deal_probability_rmse', verbose=1, save_best_only=True)
 early = EarlyStopping(patience=10, mode='min')
 reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2, min_lr=1e-7, verbose=1, mode='min')
 
-callbacks = [checkpoint, reduce_lr, early]
+callbacks = [checkpoint, reduce_lr, early] if a.k_folds <= 1 else [reduce_lr]
 if a.quantum_gravity:
     from quantum_gravity_callback import QuantumGravityCallback
     callbacks.append(QuantumGravityCallback())
@@ -848,7 +871,7 @@ if not (a.test or a.test_train):
                       loss = rac_loss , metrics=[rmse, rac_loss])
     else:
         model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
-                      loss = rmse , metrics=[rmse])
+                      loss = [rmse, binary_crossentropy] , metrics={ 'deal_probability' : rmse, 'deal_zero' : binary_accuracy})
 
     idx = list(range(X.shape[1]))
     random.shuffle(idx)
@@ -865,6 +888,7 @@ if not (a.test or a.test_train):
                 model_weights_on_init = model.get_weights()
             else:
                 model.set_weights(model_weights_on_init)
+                K.set_value(model.optimizer.lr, a.learning_rate)
 
             history = model.fit_generator(
                 generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y),
@@ -875,7 +899,18 @@ if not (a.test or a.test_train):
                 callbacks=callbacks, 
                 verbose=1)
 
-            scores.append(history.history['val_rmse'][-1]) # last epoch
+            val_rmse = history.history['val_deal_probability_rmse'][-1]
+
+            model.save('{}/best{}-fold{:d}of{:d}-epoch{:03d}-val_rmse{:.6f}.hdf5'.format(
+                MODELS_DIR,
+                cmdline,
+                fold+1,
+                a.k_folds,
+                a.max_epoch,
+                val_rmse,
+                 ))
+
+            scores.append(val_rmse) # last epoch
 
         print("RESULTS for: %s => %.6f (+/- %.6f)" % (' '.join(sys.argv[0:]), np.mean(scores), np.std(scores)))
         print('==============================================================================================')
@@ -904,7 +939,7 @@ if a.test:
 elif a.test_train:
     _b = 104 if a.use_images else 4448
     XX, XX_desc_pad, XX_title_pad, csv , bs, df, imgs_dir = \
-        X, tr_desc_pad, tr_title_pad, 'train.csv', gpus*_b//2, df_x_train, 'train_jpg'
+        X, tr_desc_pad, tr_title_pad, 'train_submission.csv', gpus*_b//2, df_x_train, 'train_jpg'
     XX_f = f_test
 
 if a.test or a.test_train:
