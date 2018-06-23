@@ -17,6 +17,7 @@ https://s3-us-west-2.amazonaws.com/kaggleglm/avito.ru.300.bin
 [4] Create train2.csv and test2.csv for classic ML models
 
 `perl -p -e 's/\/\n//' train.csv > train2.csv`
+
 `perl -p -e 's/\/\n//' test.csv > test2.csv`
 
 
