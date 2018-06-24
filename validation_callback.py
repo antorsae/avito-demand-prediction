@@ -59,6 +59,7 @@ class ValidationCallback(Callback):
         if self.rmse > averages[0]:
             self.rmse = averages[0]
             # store weights
-            self.model.save('models/best_%.6f.hdf5' % self.rmse)
+            if self.rmse < 0.219:
+                self.model.save('models/best_%.6f.hdf5' % self.rmse)
 
 
