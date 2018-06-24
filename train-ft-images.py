@@ -1011,8 +1011,9 @@ if a.test or a.test_train:
     subm = pd.read_csv(csv)
     assert np.all(subm['item_id'] == df['item_id']) # order right?
     df['deal_probability_ref'] = subm['deal_probability']
-    subm['deal_probability'] = pred
-    subm.to_csv('test-%s.csv' % cmdline, index=False)
+    subm['deal_probability'] = pred[0]
+    csv_filename = cmdline[max(0,len(cmdline)-255+9):]
+    subm.to_csv('%s/test-%s.csv' % (CSV_DIR, csv_filename), index=False)
 
     diff=(subm['deal_probability']-df['deal_probability_ref']).values
     _rmse = np.sqrt(np.mean(diff**2))
