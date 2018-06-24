@@ -10,9 +10,15 @@ class ValidationCallback(Callback):
         self.n = n
         self.validation_data = validation_data
         self.validation_steps = validation_steps
+        self.epoch = 0
+
+    def on_epoch_begin(self, epoch, logs=None):
+        self.epoch = epoch
 
     def on_batch_end(self, batch, logs=None):
         if batch % self.n != 0:
+            return
+        if self.epoch < 3:
             return
         output_generator = self.validation_data
         steps = self.validation_steps
