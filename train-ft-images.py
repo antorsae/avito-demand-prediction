@@ -91,6 +91,7 @@ parser.add_argument('-ifb',  '--image-features-bottleneck', type=int, default=No
 parser.add_argument('-iffu', '--image-feature-freeze-until', default=None, help='Freeze image feature extractor layers until layer e.g. -iffu ')
 
 parser.add_argument('-uut', '--userid-unique-threshold', type=int, default=16, help='Group user_id items whose count is below this threshold (for embedding)')
+parser.add_argument('-tut', '--title-unique-threshold', type=int, default=4, help='Group title items whose count is below this threshold (for embedding)')
 
 parser.add_argument('-char', '--char-rnn', action='store_true', help='User char-based RNN')
 
@@ -109,6 +110,8 @@ parser.add_argument('-opt', '--opt', action='store_true', help='Experimental Opt
 parser.add_argument('-aug', '--aug', action='store_true', help='Use augmentation')
 parser.add_argument('-rac', '--regression-as-classification', action='store_true', help='Regression as classification problem')
 parser.add_argument('-uif', '--use-image-features', action='store_true')
+parser.add_argument('-bal', '--balance', action='store_true')
+parser.add_argument('-val', '--val', type=int, default=0, help="Do validation every Nth batch")
 
 parser.add_argument('-t',  '--test',       action='store_true', help='Test on test set')
 parser.add_argument('-tt', '--test-train', action='store_true', help='Test on train set')
@@ -153,9 +156,22 @@ N_CLASSES = 101
 def to_categorical_idx(col, df_trn, df_test, drop_uniques=0):
     merged = pd.concat([df_trn[col], df_test[col]])
     if drop_uniques != 0:
-        unique, inverse, counts = np.unique(merged, return_counts=True, return_inverse=True)
-        unique_with_zeros = np.select([counts < drop_uniques, counts >= drop_uniques], [unique * 0, unique])
-        merged = unique_with_zeros[inverse]
+        if col == 'title':
+            merged = merged.apply(lambda x: x.replace('" ', '').replace('"', '').replace("'", ''))
+            if False:
+                # first word
+                merged = merged.apply(lambda x: x.split()[0])
+            else:
+                # first two words
+                merged = merged.apply(lambda x: " ".join(x.split()[:2]))
+            unique, inverse, counts = np.unique(merged, return_counts=True, return_inverse=True)
+            unique_with_zeros = np.select([counts < drop_uniques, counts >= drop_uniques], ['', unique])
+            merged = unique_with_zeros[inverse]
+            print(np.unique(merged), len(np.unique(merged)), len(merged))
+        else:
+            unique, inverse, counts = np.unique(merged, return_counts=True, return_inverse=True)
+            unique_with_zeros = np.select([counts < drop_uniques, counts >= drop_uniques], [unique * 0, unique])
+            merged = unique_with_zeros[inverse]
 
     train_size = df_trn[col].shape[0]
     idxs, uniques = pd.factorize(merged)
@@ -180,6 +196,8 @@ tr_p3, te_p3, tknzr_p3 = to_categorical_idx('param_3', df_x_train, df_test)
 tr_userid, te_userid, tknzr_userid = to_categorical_idx('user_id', df_x_train, df_test, drop_uniques=a.userid_unique_threshold)
 
 tr_geoid, te_geoid, tknzr_geoid = to_categorical_idx('lat_lon_hdbscan_cluster_05_03', df_x_train, df_test)
+tr_fw, te_fw, tknzr_fw = to_categorical_idx('title', df_x_train, df_test, drop_uniques=a.title_unique_threshold)
+
 #print(f'Found {len(tknzr_userid)-1} user_ids whose value count was >= {a.userid_unique_threshold}')
 
 # In[27]:
@@ -218,6 +236,9 @@ t_price = np.concatenate((tr_price, te_price))
 t_price_mean = np.nanmean(t_price)
 tr_price[np.isnan(tr_price)] = t_price_mean
 te_price[np.isnan(te_price)] = t_price_mean
+
+tr_price_range = np.rint(np.log10(df_x_train['price'].fillna(0.0).values+1.0))
+te_price_range = np.rint(np.log10(df_test['price'].fillna(0.0).values+1.0))
 
 def normalize_mean_std(df_tr, df_te, column, pre_fn=None):
     tr, te = df_tr[column].values.astype(np.float), df_te[column].values.astype(np.float)
@@ -334,6 +355,8 @@ config.len_p2    = len(tknzr_p2)
 config.len_p3    = len(tknzr_p3)
 config.len_userid= len(tknzr_userid)
 config.len_geoid = len(tknzr_geoid)
+config.len_fw = len(tknzr_fw)
+config.len_price_range = len(np.unique(tr_price_range))
 
 # In[40]:
 
@@ -350,6 +373,8 @@ config.emb_p2    = min(a.max_emb,(config.len_p2    + 1)//2)
 config.emb_p3    = min(a.max_emb,(config.len_p3    + 1)//2)
 config.emb_userid= min(a.max_emb,(config.len_userid+ 1)//2) 
 config.emb_geoid = min(a.max_emb,(config.len_geoid + 1)//2) 
+config.emb_fw = min(a.max_emb,(config.len_fw + 1)//2)
+config.emb_price_range = min(a.max_emb,(config.len_price_range + 1)//2)
 
 # In[41]:
 
@@ -359,7 +384,8 @@ X      = np.array([
     tr_p2,               tr_p3,                tr_price,            tr_itemseq, 
     tr_avg_days_up_user, tr_avg_times_up_user, tr_min_days_up_user, tr_min_times_up_user, 
     tr_max_days_up_user, tr_max_times_up_user, tr_n_user_items,     tr_has_price, 
-    tr_userid,           tr_geoid,             df_x_train['image'].values])
+    tr_userid,           tr_geoid,             tr_fw,               tr_price_range,
+    df_x_train['image'].values ])
 
 X_test = np.array([
     te_reg,              te_pcn,               te_cn,               te_ut,      
@@ -367,7 +393,8 @@ X_test = np.array([
     te_p2,               te_p3,                te_price,            te_itemseq, 
     te_avg_days_up_user, te_avg_times_up_user, te_min_days_up_user, te_min_times_up_user, 
     te_max_days_up_user, te_max_times_up_user, te_n_user_items,     te_has_price, 
-    te_userid,           te_geoid,             df_test['image'].values])
+    te_userid,           te_geoid,             te_fw,               te_price_range,
+    df_test['image'].values])
 
 Y = df_y_train['deal_probability'].values
 
@@ -397,7 +424,6 @@ def rac_loss_old(y_true, y_pred):
     # y_true = single float
     # y_pred = softmax layer
     tf = K.tf
-    y_pred = tf.norm(tf.nn.relu(y_pred))
 
     stack = tf.constant(np.stack((np.arange(N_CLASSES)*1.0)
                         for i in range(a.batch_size)), dtype=tf.float32)
@@ -436,16 +462,16 @@ def rac_loss(y_true, y_pred):
 
     distance = tf.convert_to_tensor(N_CLASSES, dtype=tf.float32) - tf.abs(stack - matrix)
     distance = tf.exp(-distance / tf.convert_to_tensor(3.0, dtype=tf.float32))
-    distance = tf.nn.softmax(distance)
+    #distance = tf.nn.softmax(distance)
 
     
-    loss = dice_loss(distance, y_pred)
-    #p1 = tf.log(y_pred + tf.convert_to_tensor(tf.constant(1e-10), dtype=tf.float32))
-    #p2 = distance
-    #p3 = p1*p2
+    #loss = dice_loss(distance, y_pred)
+    p1 = tf.log(y_pred + tf.convert_to_tensor(tf.constant(1e-10), dtype=tf.float32))
+    p2 = distance
+    p3 = p1*p2
 
-    #loss = tf.reduce_mean(-tf.reduce_sum(p3, 1))
-    return 1.0- loss
+    loss = tf.reduce_mean(-tf.reduce_sum(p3))
+    return loss
 # In[46]:
 
 
@@ -580,8 +606,14 @@ def get_model():
     inp_geoid = Input(shape=(1, ), name='inp_geoid')
     emb_geoid = Embedding(config.len_geoid, config.emb_geoid, name='emb_geoid')(inp_geoid)
 
+    inp_fw = Input(shape=(1, ), name='inp_fw')
+    emb_fw = Embedding(config.len_fw, config.emb_fw, name='emb_fw')(inp_fw)
+
+    inp_price_range = Input(shape=(1, ), name='inp_price_range')
+    emb_price_range = Embedding(config.len_price_range, config.emb_price_range, name='emb_price_range')(inp_price_range)
+
     conc_cate = concatenate([emb_reg, emb_pcn,  emb_cn, emb_ut, emb_city, emb_week, emb_imgt1, 
-                             emb_p1, emb_p2, emb_p3, emb_userid, emb_geoid,
+                             emb_p1, emb_p2, emb_p3, emb_userid, emb_geoid, emb_fw, emb_price_range
                              ], 
                             axis=-1, name='concat_categorical_vars')
     
@@ -697,7 +729,8 @@ def get_model():
         inp_p2,               inp_p3,                inp_price,            inp_itemseq, 
         inp_desc,             inp_title,             inp_avg_days_up_user, inp_avg_times_up_user, 
         inp_min_days_up_user, inp_min_times_up_user, inp_max_days_up_user, inp_max_times_up_user, 
-        inp_n_user_items,     inp_has_price,         inp_userid,           inp_geoid,
+        inp_n_user_items,     inp_has_price,         inp_userid,           inp_geoid, 
+        inp_fw,               inp_price_range
     ]
     
     if a.use_images:
@@ -807,7 +840,8 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
                   xx[:, 8], xx[:, 9], xx[:,10], xx[:,11],
                   xxd,      xxt,      xx[:,12], xx[:,13], 
                   xx[:,14], xx[:,15], xx[:,16], xx[:,17], 
-                  xx[:,18], xx[:,19], xx[:,20], xx[:,21],]
+                  xx[:,18], xx[:,19], xx[:,20], xx[:,21],
+                  xx[:,22], xx[:,23]]
             if a.use_images:
                 xxi = np.copy(xi)
                 _x.append( xxi)
@@ -863,12 +897,18 @@ if a.opt:
     from optimizer_callback import OptimizerCallback
     callbacks.append(OptimizerCallback(a.learning_rate))
 
+if a.val > 0:
+    from validation_callback import ValidationCallback
+    valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
+    train_idx = list(df_y_train[np.invert(df_y_train.index.isin(valid_idx))].index)
+    callbacks.append(ValidationCallback(a.val, gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y), len(valid_idx) // a.batch_size))
+
 # In[82]:
 
 if not (a.test or a.test_train):
     if a.regression_as_classification:
         model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
-                      loss = rac_loss , metrics=[rmse, rac_loss])
+                      loss = [rac_loss, binary_crossentropy] , metrics={ 'deal_probability' : rmse, 'deal_zero' : binary_accuracy})
     else:
         model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
                       loss = [rmse, binary_crossentropy] , metrics={ 'deal_probability' : rmse, 'deal_zero' : binary_accuracy})
@@ -915,8 +955,20 @@ if not (a.test or a.test_train):
         print("RESULTS for: %s => %.6f (+/- %.6f)" % (' '.join(sys.argv[0:]), np.mean(scores), np.std(scores)))
         print('==============================================================================================')
     else:
+
         valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
         train_idx = list(df_y_train[np.invert(df_y_train.index.isin(valid_idx))].index)
+
+        if a.balance:
+            valid_idx_set = set(valid_idx)
+            _y = df_y_train.values
+            for j in range(len(_y)):
+                if _y[j] != 0.0:
+                    if j in valid_idx_set:
+                        pass
+                    else:
+                        for _ in range(5):
+                            train_idx.append(j)
 
         model.fit_generator(
             generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y),
