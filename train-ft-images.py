@@ -113,6 +113,8 @@ parser.add_argument('-uif', '--use-image-features', action='store_true')
 parser.add_argument('-bal', '--balance', action='store_true')
 parser.add_argument('-val', '--val', type=int, default=0, help="Do validation every Nth batch")
 
+parser.add_argument('-tot', '--train-on-test', type=str, default=None, help='Train on test set (pseudo labeling), path to sub')
+
 parser.add_argument('-t',  '--test',       action='store_true', help='Test on test set')
 parser.add_argument('-tt', '--test-train', action='store_true', help='Test on train set')
 
@@ -139,6 +141,13 @@ df_x_train = pd.read_feather('df_x_train')
 df_y_train = pd.read_feather('df_y_train')
 df_test    = pd.read_feather('df_test')
 
+valid_idx = None
+if a.train_on_test is not None:
+    df_y_test = pd.read_csv(a.train_on_test)
+    valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
+    df_y_train = pd.concat([df_y_train, df_y_test], sort=False)
+    df_x_train = pd.concat([df_x_train, df_test], sort=False)
+
 f_train, f_test = None, None
 if a.use_image_features:
     f_train = np.lib.format.open_memmap('train.npy', mode='c')
@@ -153,12 +162,12 @@ N_CLASSES = 101
 # In[25]:
 
 
-def to_categorical_idx(col, df_trn, df_test, drop_uniques=0):
+def to_categorical_idx(col, df_trn, df_test, drop_uniques=0, fw=None):
     merged = pd.concat([df_trn[col], df_test[col]])
     if drop_uniques != 0:
         if col == 'title':
             merged = merged.apply(lambda x: x.replace('" ', '').replace('"', '').replace("'", ''))
-            if False:
+            if fw == 1:
                 # first word
                 merged = merged.apply(lambda x: x.split()[0])
             else:
@@ -196,7 +205,8 @@ tr_p3, te_p3, tknzr_p3 = to_categorical_idx('param_3', df_x_train, df_test)
 tr_userid, te_userid, tknzr_userid = to_categorical_idx('user_id', df_x_train, df_test, drop_uniques=a.userid_unique_threshold)
 
 tr_geoid, te_geoid, tknzr_geoid = to_categorical_idx('lat_lon_hdbscan_cluster_05_03', df_x_train, df_test)
-tr_fw, te_fw, tknzr_fw = to_categorical_idx('title', df_x_train, df_test, drop_uniques=a.title_unique_threshold)
+tr_fw, te_fw, tknzr_fw = to_categorical_idx('title', df_x_train, df_test, drop_uniques=a.title_unique_threshold, fw=1)
+tr_fw2, te_fw2, tknzr_fw2 = to_categorical_idx('title', df_x_train, df_test, drop_uniques=a.title_unique_threshold, fw=2)
 
 #print(f'Found {len(tknzr_userid)-1} user_ids whose value count was >= {a.userid_unique_threshold}')
 
@@ -356,6 +366,7 @@ config.len_p3    = len(tknzr_p3)
 config.len_userid= len(tknzr_userid)
 config.len_geoid = len(tknzr_geoid)
 config.len_fw = len(tknzr_fw)
+config.len_fw2 = len(tknzr_fw2)
 config.len_price_range = len(np.unique(tr_price_range))
 
 # In[40]:
@@ -374,6 +385,7 @@ config.emb_p3    = min(a.max_emb,(config.len_p3    + 1)//2)
 config.emb_userid= min(a.max_emb,(config.len_userid+ 1)//2) 
 config.emb_geoid = min(a.max_emb,(config.len_geoid + 1)//2) 
 config.emb_fw = min(a.max_emb,(config.len_fw + 1)//2)
+config.emb_fw2 = min(a.max_emb,(config.len_fw2 + 1)//2)
 config.emb_price_range = min(a.max_emb,(config.len_price_range + 1)//2)
 
 # In[41]:
@@ -384,8 +396,8 @@ X      = np.array([
     tr_p2,               tr_p3,                tr_price,            tr_itemseq, 
     tr_avg_days_up_user, tr_avg_times_up_user, tr_min_days_up_user, tr_min_times_up_user, 
     tr_max_days_up_user, tr_max_times_up_user, tr_n_user_items,     tr_has_price, 
-    tr_userid,           tr_geoid,             tr_fw,               tr_price_range,
-    df_x_train['image'].values ])
+    tr_userid,           tr_geoid,             tr_fw,               tr_fw2,
+    tr_price_range,      df_x_train['image'].values ])
 
 X_test = np.array([
     te_reg,              te_pcn,               te_cn,               te_ut,      
@@ -393,8 +405,8 @@ X_test = np.array([
     te_p2,               te_p3,                te_price,            te_itemseq, 
     te_avg_days_up_user, te_avg_times_up_user, te_min_days_up_user, te_min_times_up_user, 
     te_max_days_up_user, te_max_times_up_user, te_n_user_items,     te_has_price, 
-    te_userid,           te_geoid,             te_fw,               te_price_range,
-    df_test['image'].values])
+    te_userid,           te_geoid,             te_fw,               te_fw2,
+    te_price_range,      df_test['image'].values])
 
 Y = df_y_train['deal_probability'].values
 
@@ -415,6 +427,9 @@ def dice_loss(y_true, y_pred):
         K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
 
 ### rmse loss for keras
+def mse(y_true, y_pred):
+    return K.mean(K.square(y_pred - y_true), axis=None)
+
 def rmse(y_true, y_pred):
     if a.regression_as_classification:
         y_pred = K.cast(K.argmax(y_pred, axis=1), 'float32') / (N_CLASSES - 1.0)
@@ -609,11 +624,14 @@ def get_model():
     inp_fw = Input(shape=(1, ), name='inp_fw')
     emb_fw = Embedding(config.len_fw, config.emb_fw, name='emb_fw')(inp_fw)
 
+    inp_fw2 = Input(shape=(1, ), name='inp_fw2')
+    emb_fw2 = Embedding(config.len_fw2, config.emb_fw2, name='emb_fw2')(inp_fw2)
+
     inp_price_range = Input(shape=(1, ), name='inp_price_range')
     emb_price_range = Embedding(config.len_price_range, config.emb_price_range, name='emb_price_range')(inp_price_range)
 
     conc_cate = concatenate([emb_reg, emb_pcn,  emb_cn, emb_ut, emb_city, emb_week, emb_imgt1, 
-                             emb_p1, emb_p2, emb_p3, emb_userid, emb_geoid, emb_fw, emb_price_range
+                             emb_p1, emb_p2, emb_p3, emb_userid, emb_geoid, emb_fw, emb_fw2, emb_price_range
                              ], 
                             axis=-1, name='concat_categorical_vars')
     
@@ -730,7 +748,7 @@ def get_model():
         inp_desc,             inp_title,             inp_avg_days_up_user, inp_avg_times_up_user, 
         inp_min_days_up_user, inp_min_times_up_user, inp_max_days_up_user, inp_max_times_up_user, 
         inp_n_user_items,     inp_has_price,         inp_userid,           inp_geoid, 
-        inp_fw,               inp_price_range
+        inp_fw,               inp_fw2,               inp_price_range
     ]
     
     if a.use_images:
@@ -788,7 +806,12 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
         x[batch,:] = X[:fname_idx,idx[i]]
         if Y is not None:
             y[batch,...] = Y[idx[i]]
-                
+            if a.aug and not valid:
+                if np.random.rand() > 0.5:
+                    y[batch,...] *= np.random.uniform(0.9, 1.2)
+                    if y[batch,...]  > 1.0:
+                        y[batch,...] = 1.0
+
         n_vect = X_desc_pad[idx[i]].shape[0]
         i_vect = a.maxlen_desc - n_vect
         xd[batch, i_vect:, ...] = X_desc_pad[idx[i]]
@@ -841,7 +864,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
                   xxd,      xxt,      xx[:,12], xx[:,13], 
                   xx[:,14], xx[:,15], xx[:,16], xx[:,17], 
                   xx[:,18], xx[:,19], xx[:,20], xx[:,21],
-                  xx[:,22], xx[:,23]]
+                  xx[:,22], xx[:,23], xx[:,24]]
             if a.use_images:
                 xxi = np.copy(xi)
                 _x.append( xxi)
@@ -850,15 +873,6 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
             if a.use_image_features:
                 xxif = np.copy(xif)
                 _x.append(xxif)
-                #del xxif
-
-
-            if a.aug and np.random.rand > 0.75:
-                if not valid and (Y is not None):
-                    for j in range(23):
-                        _x[j] *= np.random.uniform(0.99,1.01)
-            #del xx
-            #del xxt
 
             if Y is not None:
                 assert not np.any(np.isnan(y))
@@ -883,6 +897,9 @@ if gpus > 1 : model = multi_gpu_model(model, gpus=gpus)
 ### callbacks
 cmdline = '_'.join([aa.strip().replace('models/', '') for aa in sys.argv[1:]])
 print(cmdline)
+if a.model or a.train_on_test:
+    cmdline = ''
+
 checkpoint = ModelCheckpoint(
     '%s/best%s-epoch{epoch:03d}-val_rmse{val_deal_probability_rmse:.6f}.hdf5' % (MODELS_DIR, cmdline), 
     monitor='val_deal_probability_rmse', verbose=1, save_best_only=True)
@@ -911,7 +928,7 @@ if not (a.test or a.test_train):
                       loss = [rac_loss, binary_crossentropy] , metrics={ 'deal_probability' : rmse, 'deal_zero' : binary_accuracy})
     else:
         model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
-                      loss = [rmse, binary_crossentropy] , metrics={ 'deal_probability' : rmse, 'deal_zero' : binary_accuracy})
+                      loss = [mse, binary_crossentropy] , metrics={ 'deal_probability' : rmse, 'deal_zero' : binary_accuracy})
 
     idx = list(range(X.shape[1]))
     random.shuffle(idx)
@@ -956,8 +973,10 @@ if not (a.test or a.test_train):
         print('==============================================================================================')
     else:
 
-        valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
+        if valid_idx is None:
+            valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
         train_idx = list(df_y_train[np.invert(df_y_train.index.isin(valid_idx))].index)
+
 
         if a.balance:
             valid_idx_set = set(valid_idx)
