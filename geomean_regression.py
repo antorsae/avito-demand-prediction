@@ -30,7 +30,7 @@ K.set_session(sess)
 
 # yapf: disable
 parser = argparse.ArgumentParser()
-parser.add_argument('-mep', '--max-epoch', type=int, default=200, help='Epoch to run')
+parser.add_argument('-mep', '--max-epoch', type=int, default=3, help='Epoch to run')
 parser.add_argument('-b', '--batch-size', type=int, default=None, help='Batch Size during training, e.g. -b 2')
 parser.add_argument('-g', '--gpus', type=int, default=1, help='GPUs')
 parser.add_argument('-l', '--learning-rate', type=float, default=1e-3, help='Initial learning rate')
@@ -62,7 +62,7 @@ df_test = pd.read_csv('test_predictions_stack.csv')
 
 X = np.clip(df_x_train.values, 0, 1)
 Y = df_y_train['deal_probability'].values
-
+X_test = np.clip(df_test.fillna(0.0).values, 0, 1)
 
 def mse(y_true, y_pred):
     return K.mean(K.square(y_pred - y_true), axis=None)
@@ -163,3 +163,18 @@ if not a.test:
         epochs=a.max_epoch,
         callbacks=callbacks,
         verbose=1)
+
+if a.test:
+    test_idx = list(df_test.index)
+    print(len(test_idx))
+    print(X_test, X_test.shape)
+    a.batch_size = 3158
+    n_test = X_test.shape[0]
+    pred = model.predict_generator(
+        generator        = gen(test_idx, valid=False, X=X_test, Y=None),
+        steps            = n_test // a.batch_size ,
+        verbose=1)
+    print(pred)
+    subm = pd.read_csv('sample_submission.csv')
+    subm['deal_probability'] = pred
+    subm.to_csv('pred_weighted_avg.csv', index=False)
