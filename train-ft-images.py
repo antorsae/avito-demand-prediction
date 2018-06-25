@@ -31,8 +31,8 @@ from keras.layers import GlobalMaxPool1D, GlobalMaxPool2D, GlobalAveragePooling1
 from keras.layers import concatenate, Flatten
 from keras.layers import LSTM, CuDNNGRU, CuDNNLSTM, GRU, Bidirectional, Conv1D
 from keras.models import Model, load_model
-from keras.losses import mean_squared_error, binary_crossentropy
-from keras.metrics import binary_accuracy
+from keras.losses import mean_squared_error, binary_crossentropy, categorical_crossentropy
+from keras.metrics import binary_accuracy, categorical_accuracy
 from keras.applications import *
 import jpeg4py as jpeg
 from keras import backend as K
@@ -81,7 +81,10 @@ parser.add_argument('-fc',   '--fully-connected-layers', nargs='+', type=int, de
 parser.add_argument('-do',  '--dropout', type=float, default=0, help='Dropout rate')
 
 parser.add_argument('-dzfc', '--deal-zero-fully-connected-layers', nargs='+', type=int, default=[2048, 1024, 512, 256, 128, 64, 32], help='Specify deal zero FC layers, e.g. -fc 1024 512 256')
-parser.add_argument('-dzdo',  '--deal-zero-dropout', type=float, default=0, help='Dropout rate for deal zero FC layers')
+parser.add_argument('-dzdo', '--deal-zero-dropout', type=float, default=0, help='Dropout rate for deal zero FC layers')
+
+parser.add_argument('-imt1fc', '--imgtop1-fully-connected-layers', nargs='+', type=int, default=[4096], help='Specify imgtop1 FC layers, e.g. -fc 1024 512 256')
+parser.add_argument('-imt1do', '--imgtop1-dropout', type=float, default=0, help='Dropout rate for imgtop1 FC layers')
 
 parser.add_argument('-me',  '--max-emb', type=int, default=64, help='Maximum size of embedding vectors for categorical features')
 
@@ -139,7 +142,7 @@ df_test    = pd.read_feather('df_test')
 f_train, f_test = None, None
 if a.use_image_features:
     f_train = np.lib.format.open_memmap('train.npy', mode='c')
-    #f_test = np.lib.format.open_memmap('test.npy', mode='c')
+    f_test  = np.lib.format.open_memmap('test.npy',  mode='c')
 
 # In[24]:
 
@@ -328,7 +331,7 @@ config.len_cn    = len(tknzr_cn)
 config.len_ut    = len(tknzr_ut)
 config.len_city  = len(tknzr_city)
 config.len_week  = 7
-config.len_imgt1 = int(df_x_train['image_top_1'].max())+1
+N_IMGTOP1        = config.len_imgt1 = int(df_x_train['image_top_1'].max())+1
 config.len_p1    = len(tknzr_p1)
 config.len_p2    = len(tknzr_p2)
 config.len_p3    = len(tknzr_p3)
@@ -354,7 +357,7 @@ config.emb_geoid = min(a.max_emb,(config.len_geoid + 1)//2)
 # In[41]:
 
 X      = np.array([
-    tr_reg,              tr_pcn,               tr_cn,               tr_ut,      
+    tr_reg,              tr_pcn,               tr_cn,               tr_ut,                
     tr_city,             tr_week,              tr_imgt1,            tr_p1, 
     tr_p2,               tr_p3,                tr_price,            tr_itemseq, 
     tr_avg_days_up_user, tr_avg_times_up_user, tr_min_days_up_user, tr_min_times_up_user, 
@@ -605,24 +608,22 @@ def get_model():
     inp_avg_times_up_user = Input(shape=(1, ), name='inp_avg_times_up_user')
     emb_avg_times_up_user = inp_avg_times_up_user
 
-    inp_min_days_up_user = Input(shape=(1, ),  name='inp_min_days_up_user')
-    emb_min_days_up_user = inp_min_days_up_user
-    inp_min_times_up_user = Input(shape=(1, ), name='inp_min_times_up_user')
-    emb_min_times_up_user = inp_min_times_up_user
+    #inp_min_days_up_user = Input(shape=(1, ),  name='inp_min_days_up_user')
+    #emb_min_days_up_user = inp_min_days_up_user
+    #inp_min_times_up_user = Input(shape=(1, ), name='inp_min_times_up_user')
+    #emb_min_times_up_user = inp_min_times_up_user
 
-    inp_max_days_up_user = Input(shape=(1, ),  name='inp_max_days_up_user')
-    emb_max_days_up_user = inp_max_days_up_user
-    inp_max_times_up_user = Input(shape=(1, ), name='inp_max_times_up_user')
-    emb_max_times_up_user = inp_max_times_up_user
+    #inp_max_days_up_user = Input(shape=(1, ),  name='inp_max_days_up_user')
+    #emb_max_days_up_user = inp_max_days_up_user
+    #inp_max_times_up_user = Input(shape=(1, ), name='inp_max_times_up_user')
+    #emb_max_times_up_user = inp_max_times_up_user
     
     inp_n_user_items = Input(shape=(1, ), name='n_user_items')
     emb_n_user_items = inp_n_user_items
 
     conc_cont = concatenate([
         conc_cate, emb_price,
-        emb_avg_days_up_user, emb_avg_times_up_user, 
-        emb_min_days_up_user, emb_min_times_up_user, 
-        emb_max_days_up_user, emb_max_times_up_user, 
+        emb_avg_days_up_user, emb_avg_times_up_user, #emb_min_days_up_user, emb_min_times_up_user, emb_max_days_up_user, emb_max_times_up_user, 
         emb_n_user_items, emb_has_price, emb_itemseq,
         ], axis=-1)
     
@@ -652,6 +653,9 @@ def get_model():
     title_layer = CuDNNGRU(a.rnn_channels_bottleneck, return_sequences=False)(title_layer)
 
     conc_desc = concatenate([x, desc_layer, title_layer], axis=-1)
+
+    conc_imgtop1 = Flatten()(concatenate([emb_pcn, emb_cn, emb_p1, emb_p2, emb_p3], axis=-1))
+    conc_imgtop1 = concatenate([conc_imgtop1, title_layer], axis=-1)
     
     if a.use_images:
         inp_image = Input(shape=(CROP_SIZE, CROP_SIZE, 3), name='inp_image')
@@ -684,6 +688,14 @@ def get_model():
         deal_zero_head = act_fn(**act_pa)(deal_zero_head)
         if a.deal_zero_dropout > 0.: deal_zero_head = Dropout(a.deal_zero_dropout)(deal_zero_head)  
 
+    #conc_imgtop1
+    # 0/1 HEAD
+    for i, fcl in enumerate(a.imgtop1_fully_connected_layers):
+        imgtop1_head = Dense(fcl)(imgtop1_head if i > 0 else conc_imgtop1)
+        if bn: imgtop1_head = BatchNormalization()(imgtop1_head)
+        imgtop1_head = act_fn(**act_pa)(imgtop1_head)
+        if a.imgtop1_dropout > 0.: imgtop1_head = Dropout(a.imgtop1_dropout)(imgtop1_head)  
+
     if a.regression_as_classification:
         deal_probability = Dense(N_CLASSES, activation='softmax', name='deal_probability')(deal_probability_head)
     else:
@@ -691,12 +703,13 @@ def get_model():
 
     deal_zero = Dense(1, activation='sigmoid', name='deal_zero')(deal_zero_head)
 
+    imgtop1   = Dense(N_IMGTOP1, activation='softmax', name='imgtop1')(imgtop1_head)
+
     inputs = [
         inp_reg,              inp_pcn,               inp_cn,               inp_ut, 
         inp_city,             inp_week,              inp_imgt1,            inp_p1, 
         inp_p2,               inp_p3,                inp_price,            inp_itemseq, 
-        inp_desc,             inp_title,             inp_avg_days_up_user, inp_avg_times_up_user, 
-        inp_min_days_up_user, inp_min_times_up_user, inp_max_days_up_user, inp_max_times_up_user, 
+        inp_desc,             inp_title,             inp_avg_days_up_user, inp_avg_times_up_user,  #inp_min_days_up_user, inp_min_times_up_user, inp_max_days_up_user, inp_max_times_up_user, 
         inp_n_user_items,     inp_has_price,         inp_userid,           inp_geoid,
     ]
     
@@ -706,7 +719,7 @@ def get_model():
     if a.use_image_features:
         inputs.append(inp_img_f)
 
-    model = Model(inputs = inputs, outputs = [deal_probability, deal_zero])
+    model = Model(inputs = inputs, outputs = [deal_probability, deal_zero, imgtop1])
 
     return model
 
@@ -742,6 +755,8 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
         
     xd = np.zeros((a.batch_size, a.maxlen_desc  ), dtype=np.float32)
     xt = np.zeros((a.batch_size, a.maxlen_title ), dtype=np.float32)
+
+    #w_deal_probabilities = w_deal_zero = w_imgtop1 = np.ones((a.batch_size,), dtype=np.float32)
     
     batch = 0
     i = 0
@@ -805,8 +820,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
             _x = [xx[:, 0], xx[:, 1], xx[:, 2], xx[:, 3], 
                   xx[:, 4], xx[:, 5], xx[:, 6], xx[:, 7], 
                   xx[:, 8], xx[:, 9], xx[:,10], xx[:,11],
-                  xxd,      xxt,      xx[:,12], xx[:,13], 
-                  xx[:,14], xx[:,15], xx[:,16], xx[:,17], 
+                  xxd,      xxt,      xx[:,12], xx[:,13],  #xx[:,14], xx[:,15], xx[:,16], xx[:,17], 
                   xx[:,18], xx[:,19], xx[:,20], xx[:,21],]
             if a.use_images:
                 xxi = np.copy(xi)
@@ -828,7 +842,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
 
             if Y is not None:
                 assert not np.any(np.isnan(y))
-                yield(_x, [np.copy(y), (y==0)*1.])
+                yield(_x, [np.copy(y), (y==0)*1., to_categorical(_x[6], N_IMGTOP1)])#, [w_deal_probabilities, w_deal_zero, w_imgtop1])
             else:
                 yield(_x)
             ##if i == a.batch_size * 4:
@@ -871,7 +885,9 @@ if not (a.test or a.test_train):
                       loss = rac_loss , metrics=[rmse, rac_loss])
     else:
         model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
-                      loss = [rmse, binary_crossentropy] , metrics={ 'deal_probability' : rmse, 'deal_zero' : binary_accuracy})
+                      loss = ['mse', binary_crossentropy, categorical_crossentropy] , 
+                      metrics={ 'deal_probability' : rmse, 'deal_zero' : binary_accuracy, 'imgtop1' : categorical_accuracy},
+                      loss_weights = [1., 0.5, 0.1],)
 
     idx = list(range(X.shape[1]))
     random.shuffle(idx)
@@ -960,8 +976,9 @@ if a.test or a.test_train:
     assert np.all(subm['item_id'] == df['item_id']) # order right?
     df['deal_probability_ref'] = subm['deal_probability']
     subm['deal_probability'] = pred[0]
-    csv_filename = cmdline[max(0,len(cmdline)-255+9):]
-    subm.to_csv('%s/test-%s.csv' % (CSV_DIR, csv_filename), index=False)
+    preffix = 'test' if imgs_dir == 'test_jpg' else 'train'
+    csv_filename = cmdline[max(0,len(cmdline)-255+5+len(preffix)):]
+    subm.to_csv('%s/%s-%s.csv' % (CSV_DIR, preffix, csv_filename), index=False)
 
     diff=(subm['deal_probability']-df['deal_probability_ref']).values
     _rmse = np.sqrt(np.mean(diff**2))
