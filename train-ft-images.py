@@ -112,6 +112,7 @@ parser.add_argument('-qg', '--quantum_gravity', action='store_true', help='Quant
 parser.add_argument('-opt', '--opt', action='store_true', help='Experimental Optimizer')
 parser.add_argument('-aug', '--aug', action='store_true', help='Use augmentation')
 parser.add_argument('-fnr', '--feature-noise-rate', type=float, default=0., help='Rate (0..1) of features to be injected w/ noise, e.g. -fnr 0.2')
+parser.add_argument('-sn', '--smart-noise', action='store_true', help='Use smart noise (instead of pure swap noise)')
 parser.add_argument('-rac', '--regression-as-classification', action='store_true', help='Regression as classification problem')
 parser.add_argument('-uif', '--use-image-features', action='store_true')
 parser.add_argument('-bal', '--balance', action='store_true')
@@ -388,13 +389,23 @@ config.emb_price_range = min(a.max_emb,(config.len_price_range + 1)//2)
 # In[41]:
 
 X      = np.array([
-    tr_reg,              tr_pcn,               tr_cn,               tr_ut,                
-    tr_city,             tr_week,              tr_imgt1,            tr_p1, 
-    tr_p2,               tr_p3,                tr_price,            tr_itemseq, 
-    tr_avg_days_up_user, tr_avg_times_up_user, tr_min_days_up_user, tr_min_times_up_user, 
-    tr_max_days_up_user, tr_max_times_up_user, tr_n_user_items,     tr_has_price, 
-    tr_userid,           tr_geoid,             #tr_fw,               tr_price_range,
+    tr_reg,              tr_pcn,               tr_cn,               tr_ut,                  #  0       
+    tr_city,             tr_week,              tr_imgt1,            tr_p1,                  #  4
+    tr_p2,               tr_p3,                tr_price,            tr_itemseq,             #  8
+    tr_avg_days_up_user, tr_avg_times_up_user, tr_min_days_up_user, tr_min_times_up_user,   # 12
+    tr_max_days_up_user, tr_max_times_up_user, tr_n_user_items,     tr_has_price,           # 16
+    tr_userid,           tr_geoid,             #tr_fw,               tr_price_range,        # 20
     df_x_train['image'].values ])
+
+X_related_features = [ \
+    [0, 4, 21], # reg, city, geoid
+    [1, 2 ],    # pcn, cn
+    [3, 11, 12,13,14,15,16,17,18,20], #ut, itemseq, avg_days_up_user, avg_times_up_user, min_days_up_user, min_times_up_user, max_days_up_user, max_times_up_user, n_user_items,userid
+    [6, 22], #imgt1, image
+    [7, 8, 9], # p1,p2,p3
+    [10, 19], # price, has_price
+    ]
+X_unrelated_feature_groups = [0,1,3,5,6,7,10]
 
 X_test = np.array([
     te_reg,              te_pcn,               te_cn,               te_ut,      
@@ -838,15 +849,30 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
             
             clip = lambda value, minval, maxval: sorted((minval, value, maxval))[1]
 
-            __i = np.random.choice(range(x.shape[1]), size=int(x.shape[1]*a.feature_noise_rate), replace=False) # distort % of features
+            if a.smart_noise:
+                __i = np.random.choice( 
+                    X_unrelated_feature_groups, 
+                    size=int(np.ceil(len(X_unrelated_feature_groups)*a.feature_noise_rate)), 
+                    replace=False) # distort % of features
+            else:
+                __i = np.random.choice(
+                    range(x.shape[1]), 
+                    size=int(np.ceil(x.shape[1]*a.feature_noise_rate)), 
+                    replace=False) # distort % of features
+
             for _i in __i:
-                similar_idx = None
-                while similar_idx is None:
-                    similar_bin = clip(Y_binned[idx[i]] + np.random.randint(-4,5), min_bin, max_bin)
-                    if gY_bins_idx[similar_bin].size > 0:
-                        similar_idx = np.random.choice(gY_bins_idx[similar_bin])
-                
-                similar_idx = np.random.choice(idx) # hack to pick from any other sample, this voids the previous 5 lines
+                if a.smart_noise:
+                    similar_idx = None
+                    while similar_idx is None:
+                        similar_bin = clip(Y_binned[idx[i]] + np.random.randint(-4,5), min_bin, max_bin)
+                        if gY_bins_idx[similar_bin].size > 0:
+                            similar_idx = np.random.choice(gY_bins_idx[similar_bin])
+                    for related_features in X_related_features:
+                        if _i in related_features:
+                            for related_feature in related_features:
+                                x[batch,related_feature] = X[related_feature, similar_idx] 
+                else:
+                    similar_idx = np.random.choice(idx) # hack to pick from any other sample, this voids the previous 5 lines
                 x[batch,_i] = X[_i, similar_idx] 
 
         if Y is not None:
