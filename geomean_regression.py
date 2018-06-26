@@ -4,10 +4,11 @@ import numpy as np
 import pandas as pd
 from keras import backend as K
 from keras.models import Model, load_model
-from keras.layers import Input
+from keras.layers import Input, concatenate
 from keras.optimizers import RMSprop, Adam, SGD
 from keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 from geomean_layer import GeomeanLayer
+from mean_layer import MeanLayer
 from multi_gpu_keras import multi_gpu_model
 from debug_callback import DebugCallback
 
@@ -82,7 +83,9 @@ def get_model():
     input = Input(shape=(X.shape[1], ), name='input')
     x = input
     weighted_geomean = GeomeanLayer()(x)
-    model = Model(inputs=input, outputs=weighted_geomean)
+    weighted_mean = MeanLayer()(x)
+    result = MeanLayer()(concatenate([weighted_geomean, weighted_mean], axis=1))
+    model = Model(inputs=input, outputs=result)
     return model
 
 
@@ -149,7 +152,7 @@ callbacks = [checkpoint, early, reduce_lr]
 
 if not a.test and not a.test_train:
     model.compile(
-        optimizer=Adam(lr=a.learning_rate), loss=[rmse], metrics=[rmse])
+        optimizer=RMSprop(lr=a.learning_rate), loss=[rmse], metrics=[rmse])
     idx = list(range(X.shape[0]))
     random.shuffle(idx)
 
@@ -205,4 +208,4 @@ if a.test_train:
     diff=(subm['deal_probability']-subm['deal_probability_new']).values
     _rmse = np.sqrt(np.mean(diff**2))
     print("RMSE is %f" % (_rmse))
-    #subm.to_csv('pred_weighted_avg.csv', index=False)
+    subm.to_csv('pred_weighted_avg.csv', index=False, columns=['deal_probability_new'])

@@ -3,32 +3,29 @@ from keras.engine.topology import Layer
 import numpy as np
 
 
-class GeomeanLayer(Layer):
+class MeanLayer(Layer):
     def __init__(self, **kwargs):
-        super(GeomeanLayer, self).__init__(**kwargs)
+        super(MeanLayer, self).__init__(**kwargs)
 
     def build(self, input_shape):
         self.regression_weights = self.add_weight(
             name='regression_weights',
             shape=(input_shape[1], ),
-            initializer='ones',
+            initializer='uniform',
             trainable=True)
         self.regression_bias = self.add_weight(
             name='regression_bias',
             shape=(1, ),
             initializer='zero',
             trainable=True)
-        super(GeomeanLayer, self).build(input_shape)
+        super(MeanLayer, self).build(input_shape)
 
     def call(self, x):
         tf = K.tf
-        t = tf.exp(tf.reduce_sum(self.regression_weights*tf.log(tf.clip_by_value(x, K.epsilon(), 1.0)), 1)/ tf.reduce_sum(self.regression_weights+K.epsilon()))
-        t = tf.add(t, self.regression_bias)
-        t = tf.reshape(t, [-1, 1])
-        print(t.get_shape())
-        return t
-
-        #return tf.reshape(tf.reduce_sum(self.regression_weights*x, 1) / tf.reduce_sum(self.regression_weights+K.epsilon()), [-1, 1])
+        return tf.reshape(
+            tf.reduce_sum(self.regression_weights * x, 1) /
+            tf.reduce_sum(self.regression_weights + K.epsilon()),
+            [-1, 1]) + self.regression_bias
 
     def compute_output_shape(self, input_shape):
         return (input_shape[0], 1)
