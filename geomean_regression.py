@@ -189,6 +189,7 @@ if a.test:
     subm.to_csv('pred_weighted_avg.csv', index=False)
 
 if a.test_train:
+    print(model.get_weights())
     train_idx = list(df_x_train.index)
     print(len(train_idx))
     print(X, X.shape)
