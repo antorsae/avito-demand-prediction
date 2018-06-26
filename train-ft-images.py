@@ -111,6 +111,7 @@ parser.add_argument('-kf',   '--k-folds', type=int, default=1,    help='Evaluate
 parser.add_argument('-qg', '--quantum_gravity', action='store_true', help='Quantum Gravity')
 parser.add_argument('-opt', '--opt', action='store_true', help='Experimental Optimizer')
 parser.add_argument('-aug', '--aug', action='store_true', help='Use augmentation')
+parser.add_argument('-fnr', '--feature-noise-rate', type=float, default=0., help='Rate (0..1) of features to be injected w/ noise, e.g. -fnr 0.2')
 parser.add_argument('-rac', '--regression-as-classification', action='store_true', help='Regression as classification problem')
 parser.add_argument('-uif', '--use-image-features', action='store_true')
 parser.add_argument('-bal', '--balance', action='store_true')
@@ -833,11 +834,11 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
             
         x[batch,:] = X[:fname_idx,idx[i]]
 
-        if (Y is not None) and (not valid):
+        if (Y is not None) and (not valid) and (a.feature_noise_rate > 0.):
             
             clip = lambda value, minval, maxval: sorted((minval, value, maxval))[1]
 
-            __i = np.random.choice(range(x.shape[1]), size=int(x.shape[1]*.2), replace=False) # distort % of features
+            __i = np.random.choice(range(x.shape[1]), size=int(x.shape[1]*a.feature_noise_rate), replace=False) # distort % of features
             for _i in __i:
                 similar_idx = None
                 while similar_idx is None:
@@ -845,8 +846,8 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
                     if gY_bins_idx[similar_bin].size > 0:
                         similar_idx = np.random.choice(gY_bins_idx[similar_bin])
                 
-                similar_idx = np.random.choice(idx) # hack to pick from any other sample
-                x[batch,_i] = X[_i, similar_idx] # similar_idx for more conservative noise
+                similar_idx = np.random.choice(idx) # hack to pick from any other sample, this voids the previous 5 lines
+                x[batch,_i] = X[_i, similar_idx] 
 
         if Y is not None:
             y[batch,...] = Y[idx[i]]
