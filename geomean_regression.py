@@ -40,6 +40,7 @@ parser.add_argument('-w', '--weights', help='load hdf5 weights from model (and c
 
 parser.add_argument('-d', '--debug', action='store_true', help='Debug')
 parser.add_argument('-t', '--test', action='store_true', help='Test on test set')
+parser.add_argument('-tt', '--test-train', action='store_true', help='Test on train set')
 # yapf: enable
 
 a = parser.parse_args()
@@ -65,12 +66,17 @@ Y = df_y_train['deal_probability'].values
 X_test = np.clip(df_test.fillna(0.0).values, 0, 1)
 
 def mse(y_true, y_pred):
-    return K.mean(K.square(y_pred - y_true), axis=None)
+    return K.mean(K.square(y_pred - y_true), axis=-1)
 
 
 def rmse(y_true, y_pred):
-    return K.sqrt(K.mean(K.square(y_pred - y_true), axis=None))
+    #return K.sqrt(K.mean(K.square(K.clip(y_pred, 0.0, 1.0) - y_true), axis=-1))
+    return tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(y_true, tf.clip_by_value(y_pred, 0.0, 1.0)))))
 
+def rmse_numpy(y_true, y_pred):
+    diff = np.array(y_true) - np.array(y_pred)
+    _rmse = np.sqrt(np.mean(diff**2))
+    return _rmse
 
 def get_model():
     input = Input(shape=(X.shape[1], ), name='input')
@@ -141,9 +147,9 @@ reduce_lr = ReduceLROnPlateau(
 
 callbacks = [checkpoint, early, reduce_lr]
 
-if not a.test:
+if not a.test and not a.test_train:
     model.compile(
-        optimizer=SGD(lr=a.learning_rate), loss=[rmse], metrics=[rmse])
+        optimizer=Adam(lr=a.learning_rate), loss=[rmse], metrics=[rmse])
     idx = list(range(X.shape[0]))
     random.shuffle(idx)
 
@@ -153,11 +159,14 @@ if not a.test:
 
     if a.debug:
         callbacks.append(
-            DebugCallback(gen(train_idx, valid=False, X=X, Y=Y), 3))
+            DebugCallback(gen(valid_idx, valid=False, X=X, Y=Y), 100))
 
     model.fit_generator(
+        #generator=gen(list(df_y_train.index), valid=False, X=X, Y=Y),
+        #steps_per_epoch=(len(list(df_y_train.index)) // a.batch_size),
         generator=gen(train_idx, valid=False, X=X, Y=Y),
-        steps_per_epoch=len(train_idx) // a.batch_size,
+        steps_per_epoch=(len(train_idx) // a.batch_size),
+
         validation_data=gen(valid_idx, valid=True, X=X, Y=Y),
         validation_steps=len(valid_idx) // a.batch_size,
         epochs=a.max_epoch,
@@ -176,5 +185,23 @@ if a.test:
         verbose=1)
     print(pred)
     subm = pd.read_csv('sample_submission.csv')
-    subm['deal_probability'] = pred
+    subm['deal_probability'] = np.clip(pred, 0.0, 1.0)
     subm.to_csv('pred_weighted_avg.csv', index=False)
+
+if a.test_train:
+    train_idx = list(df_x_train.index)
+    print(len(train_idx))
+    print(X, X.shape)
+    a.batch_size = 4448
+    n_test = X.shape[0]
+    pred = model.predict_generator(
+        generator        = gen(list(df_y_train.index), valid=False, X=X, Y=None),
+        steps            = n_test // a.batch_size ,
+        verbose=1)
+    print(pred)
+    subm = pd.read_csv('train_submission.csv')
+    subm['deal_probability_new'] = np.clip(pred, 0.0, 1.0)
+    diff=(subm['deal_probability']-subm['deal_probability_new']).values
+    _rmse = np.sqrt(np.mean(diff**2))
+    print("RMSE is %f" % (_rmse))
+    #subm.to_csv('pred_weighted_avg.csv', index=False)

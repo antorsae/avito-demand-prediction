@@ -13,9 +13,11 @@ class DebugCallback(Callback):
         return
 
     def on_batch_begin(self, batch, logs=None):
-        print(batch)
-        if batch>10:
-            assert False
+        #print(batch)
+        if batch % 10 != 0:
+            return
+        #if batch>10:
+        #    assert False
         output_generator = self.validation_data
         steps = self.validation_steps
 
@@ -26,10 +28,10 @@ class DebugCallback(Callback):
         while steps_done < steps:
             generator_output = next(output_generator)
             x, y = generator_output
-            print(x, y, x.shape, y.shape)
+            #print(x, y, x.shape, y.shape)
 
             y_pred = self.model.predict_on_batch(x)
-            print('y_pred', y_pred)
+            #print('y_pred', y_pred)
             #assert False
 
             diff = y_pred - y
