@@ -48,7 +48,7 @@ def get_available_gpus():
     local_device_protos = device_lib.list_local_devices()
     return [x.name for x in local_device_protos if x.device_type == 'GPU']
 
-gpus = len(get_available_gpus())
+gpus = max(1, len(get_available_gpus()))
 
 PATH = '.'
 MODELS_DIR = 'models'
@@ -116,10 +116,10 @@ parser.add_argument('-uif', '--use-image-features', action='store_true')
 parser.add_argument('-bal', '--balance', action='store_true')
 parser.add_argument('-val', '--val', type=int, default=0, help="Do validation every Nth batch")
 
-parser.add_argument('-tot', '--train-on-test', type=str, default=None, help='Train on test set (pseudo labeling), path to sub')
+parser.add_argument('-t',  '--test',         action='store_true', help='Test on test set')
+parser.add_argument('-tt', '--test-train',   action='store_true', help='Test on train set')
+parser.add_argument('-tp', '--test-preffix', default=None, help='Preffix for CSV vile')
 
-parser.add_argument('-t',  '--test',       action='store_true', help='Test on test set')
-parser.add_argument('-tt', '--test-train', action='store_true', help='Test on train set')
 
 a = parser.parse_args()
 
@@ -135,6 +135,8 @@ if a.batch_size is None:
 if a.gpus is not None:
     gpus = a.gpus
 
+a.test_preffix = a.test_preffix or ('train' if a.test_train else 'test' )
+
 SEED = 42
 np.random.seed(SEED)
 random.seed(SEED)
@@ -143,13 +145,6 @@ random.seed(SEED)
 df_x_train = pd.read_feather('df_x_train')
 df_y_train = pd.read_feather('df_y_train')
 df_test    = pd.read_feather('df_test')
-
-valid_idx = None
-if a.train_on_test is not None:
-    df_y_test = pd.read_csv(a.train_on_test)
-    valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
-    df_y_train = pd.concat([df_y_train, df_y_test], sort=False)
-    df_x_train = pd.concat([df_x_train, df_test], sort=False)
 
 f_train, f_test = None, None
 if a.use_image_features:
@@ -165,12 +160,12 @@ N_CLASSES = 101
 # In[25]:
 
 
-def to_categorical_idx(col, df_trn, df_test, drop_uniques=0, fw=None):
+def to_categorical_idx(col, df_trn, df_test, drop_uniques=0):
     merged = pd.concat([df_trn[col], df_test[col]])
     if drop_uniques != 0:
         if col == 'title':
             merged = merged.apply(lambda x: x.replace('" ', '').replace('"', '').replace("'", ''))
-            if fw == 1:
+            if False:
                 # first word
                 merged = merged.apply(lambda x: x.split()[0])
             else:
@@ -208,8 +203,7 @@ tr_p3, te_p3, tknzr_p3 = to_categorical_idx('param_3', df_x_train, df_test)
 tr_userid, te_userid, tknzr_userid = to_categorical_idx('user_id', df_x_train, df_test, drop_uniques=a.userid_unique_threshold)
 
 tr_geoid, te_geoid, tknzr_geoid = to_categorical_idx('lat_lon_hdbscan_cluster_05_03', df_x_train, df_test)
-tr_fw, te_fw, tknzr_fw = to_categorical_idx('title', df_x_train, df_test, drop_uniques=a.title_unique_threshold, fw=1)
-tr_fw2, te_fw2, tknzr_fw2 = to_categorical_idx('title', df_x_train, df_test, drop_uniques=a.title_unique_threshold, fw=2)
+tr_fw, te_fw, tknzr_fw = to_categorical_idx('title', df_x_train, df_test, drop_uniques=a.title_unique_threshold)
 
 #print(f'Found {len(tknzr_userid)-1} user_ids whose value count was >= {a.userid_unique_threshold}')
 
@@ -363,13 +357,13 @@ config.len_ut    = len(tknzr_ut)
 config.len_city  = len(tknzr_city)
 config.len_week  = 7
 N_IMGTOP1        = config.len_imgt1 = int(df_x_train['image_top_1'].max())+1
+NA_IMGTOP1       = 3067 #see make_feather
 config.len_p1    = len(tknzr_p1)
 config.len_p2    = len(tknzr_p2)
 config.len_p3    = len(tknzr_p3)
 config.len_userid= len(tknzr_userid)
 config.len_geoid = len(tknzr_geoid)
 config.len_fw = len(tknzr_fw)
-config.len_fw2 = len(tknzr_fw2)
 config.len_price_range = len(np.unique(tr_price_range))
 
 # In[40]:
@@ -388,7 +382,6 @@ config.emb_p3    = min(a.max_emb,(config.len_p3    + 1)//2)
 config.emb_userid= min(a.max_emb,(config.len_userid+ 1)//2) 
 config.emb_geoid = min(a.max_emb,(config.len_geoid + 1)//2) 
 config.emb_fw = min(a.max_emb,(config.len_fw + 1)//2)
-config.emb_fw2 = min(a.max_emb,(config.len_fw2 + 1)//2)
 config.emb_price_range = min(a.max_emb,(config.len_price_range + 1)//2)
 
 # In[41]:
@@ -399,8 +392,8 @@ X      = np.array([
     tr_p2,               tr_p3,                tr_price,            tr_itemseq, 
     tr_avg_days_up_user, tr_avg_times_up_user, tr_min_days_up_user, tr_min_times_up_user, 
     tr_max_days_up_user, tr_max_times_up_user, tr_n_user_items,     tr_has_price, 
-    tr_userid,           tr_geoid,             tr_fw,               tr_fw2,
-    tr_price_range,      df_x_train['image'].values ])
+    tr_userid,           tr_geoid,             #tr_fw,               tr_price_range,
+    df_x_train['image'].values ])
 
 X_test = np.array([
     te_reg,              te_pcn,               te_cn,               te_ut,      
@@ -408,10 +401,16 @@ X_test = np.array([
     te_p2,               te_p3,                te_price,            te_itemseq, 
     te_avg_days_up_user, te_avg_times_up_user, te_min_days_up_user, te_min_times_up_user, 
     te_max_days_up_user, te_max_times_up_user, te_n_user_items,     te_has_price, 
-    te_userid,           te_geoid,             te_fw,               te_fw2,
-    te_price_range,      df_test['image'].values])
+    te_userid,           te_geoid,             #te_fw,               te_price_range,
+    df_test['image'].values])
 
 Y = df_y_train['deal_probability'].values
+Y_bins = np.linspace(0,1,20)
+Y_bins[-1] += 1
+Y_binned = np.digitize(Y, Y_bins)
+Y_bins_idx = {}
+for i in range(1,Y_bins.shape[0]):
+    Y_bins_idx[i] = np.where(Y_binned == i)[0]
 
 gc.collect()
 
@@ -430,9 +429,6 @@ def dice_loss(y_true, y_pred):
         K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
 
 ### rmse loss for keras
-def mse(y_true, y_pred):
-    return K.mean(K.square(y_pred - y_true), axis=None)
-
 def rmse(y_true, y_pred):
     if a.regression_as_classification:
         y_pred = K.cast(K.argmax(y_pred, axis=1), 'float32') / (N_CLASSES - 1.0)
@@ -624,17 +620,14 @@ def get_model():
     inp_geoid = Input(shape=(1, ), name='inp_geoid')
     emb_geoid = Embedding(config.len_geoid, config.emb_geoid, name='emb_geoid')(inp_geoid)
 
-    inp_fw = Input(shape=(1, ), name='inp_fw')
-    emb_fw = Embedding(config.len_fw, config.emb_fw, name='emb_fw')(inp_fw)
+    #inp_fw = Input(shape=(1, ), name='inp_fw')
+    #emb_fw = Embedding(config.len_fw, config.emb_fw, name='emb_fw')(inp_fw)
 
-    inp_fw2 = Input(shape=(1, ), name='inp_fw2')
-    emb_fw2 = Embedding(config.len_fw2, config.emb_fw2, name='emb_fw2')(inp_fw2)
-
-    inp_price_range = Input(shape=(1, ), name='inp_price_range')
-    emb_price_range = Embedding(config.len_price_range, config.emb_price_range, name='emb_price_range')(inp_price_range)
+    #inp_price_range = Input(shape=(1, ), name='inp_price_range')
+    #emb_price_range = Embedding(config.len_price_range, config.emb_price_range, name='emb_price_range')(inp_price_range)
 
     conc_cate = concatenate([emb_reg, emb_pcn,  emb_cn, emb_ut, emb_city, emb_week, emb_imgt1, 
-                             emb_p1, emb_p2, emb_p3, emb_userid, emb_geoid, emb_fw, emb_fw2, emb_price_range
+                             emb_p1, emb_p2, emb_p3, emb_userid, emb_geoid, #emb_fw, emb_price_range
                              ], 
                             axis=-1, name='concat_categorical_vars')
     
@@ -677,8 +670,6 @@ def get_model():
         emb_n_user_items, emb_has_price, emb_itemseq,
         ], axis=-1)
     
-    x = conc_cont
-
     embedding_text = Embedding(emb_nwords+1, a.emb_text, 
                                weights = [embedding_matrix] if not a.char_rnn else None, 
                                trainable=True if (a.finetune_pretrained or a.char_rnn) else False,
@@ -692,20 +683,25 @@ def get_model():
     emb_title = embedding_text(inp_title)
     if a.rnn_dropout > 0.: emb_title = SpatialDropout1D(a.rnn_dropout)(emb_title)
 
+    conc_desc = conc_cont
     desc_layer = emb_desc
     for _ in range(a.rnn_layers):
         desc_layer = CuDNNGRU(a.rnn_channels,        return_sequences=True)(desc_layer)
+        #conc_desc = concatenate([conc_desc, GlobalAveragePooling1D()(desc_layer), GlobalMaxPooling1D()(desc_layer)], axis=-1)
+
     desc_layer = CuDNNGRU(a.rnn_channels_bottleneck, return_sequences=False)(desc_layer)
 
     title_layer = emb_title
     for _ in range(a.rnn_layers):
         title_layer = CuDNNGRU(a.rnn_channels,        return_sequences=True)(title_layer)
+        #conc_desc = concatenate([conc_desc, GlobalAveragePooling1D()(title_layer), GlobalMaxPooling1D()(title_layer)], axis=-1)
+
     title_layer = CuDNNGRU(a.rnn_channels_bottleneck, return_sequences=False)(title_layer)
 
-    conc_desc = concatenate([x, desc_layer, title_layer], axis=-1)
+    conc_desc = concatenate([conc_desc, desc_layer, title_layer], axis=-1)
 
     conc_imgtop1 = Flatten()(concatenate([emb_pcn, emb_cn, emb_p1, emb_p2, emb_p3], axis=-1))
-    conc_imgtop1 = concatenate([conc_imgtop1, title_layer], axis=-1)
+    conc_imgtop1 = concatenate([conc_imgtop1, title_layer, desc_layer], axis=-1)
     
     if a.use_images:
         inp_image = Input(shape=(CROP_SIZE, CROP_SIZE, 3), name='inp_image')
@@ -725,43 +721,49 @@ def get_model():
         inp_img_f = Input(shape=(3067,), name='inp_img_f')
         conc_desc = concatenate([conc_desc, inp_img_f], axis=-1)
 
+    # 0/1 HEAD
+    for i, fcl in enumerate(a.deal_zero_fully_connected_layers):
+        deal_zero_head = Dense(fcl)(deal_zero_head if i > 0 else conc_desc)
+        #if bn: deal_zero_head = BatchNormalization()(deal_zero_head)
+        deal_zero_head = act_fn(**act_pa)(deal_zero_head)
+        if a.deal_zero_dropout > 0.: deal_zero_head = Dropout(a.deal_zero_dropout)(deal_zero_head)  
+        #conc_desc = concatenate([conc_desc, deal_zero_head], axis=-1)
+
+    deal_zero = Dense(1, activation='sigmoid', name='deal_zero')(deal_zero_head)
+
+    conc_desc = concatenate([conc_desc, deal_zero], axis=-1)
+
+    #conc_imgtop1
+    for i, fcl in enumerate(a.imgtop1_fully_connected_layers):
+        imgtop1_head = Dense(fcl)(imgtop1_head if i > 0 else conc_imgtop1)
+        #if bn: imgtop1_head = BatchNormalization()(imgtop1_head)
+        imgtop1_head = act_fn(**act_pa)(imgtop1_head)
+        if a.imgtop1_dropout > 0.: imgtop1_head = Dropout(a.imgtop1_dropout)(imgtop1_head)
+        #conc_desc = concatenate([conc_desc, imgtop1_head], axis=-1)
+
+    imgtop1   = Dense(N_IMGTOP1, activation='softmax', name='imgtop1')(imgtop1_head)
+
+    conc_desc = concatenate([conc_desc, imgtop1], axis=-1)
+
     for i, fcl in enumerate(a.fully_connected_layers):
         deal_probability_head = Dense(fcl)(deal_probability_head if i > 0 else conc_desc)
         if bn: deal_probability_head = BatchNormalization()(deal_probability_head)
         deal_probability_head = act_fn(**act_pa)(deal_probability_head)
         if do > 0.: deal_probability_head = Dropout(do)(deal_probability_head)
 
-    # 0/1 HEAD
-    for i, fcl in enumerate(a.deal_zero_fully_connected_layers):
-        deal_zero_head = Dense(fcl)(deal_zero_head if i > 0 else conc_desc)
-        if bn: deal_zero_head = BatchNormalization()(deal_zero_head)
-        deal_zero_head = act_fn(**act_pa)(deal_zero_head)
-        if a.deal_zero_dropout > 0.: deal_zero_head = Dropout(a.deal_zero_dropout)(deal_zero_head)  
-
-    #conc_imgtop1
-    # 0/1 HEAD
-    for i, fcl in enumerate(a.imgtop1_fully_connected_layers):
-        imgtop1_head = Dense(fcl)(imgtop1_head if i > 0 else conc_imgtop1)
-        if bn: imgtop1_head = BatchNormalization()(imgtop1_head)
-        imgtop1_head = act_fn(**act_pa)(imgtop1_head)
-        if a.imgtop1_dropout > 0.: imgtop1_head = Dropout(a.imgtop1_dropout)(imgtop1_head)  
-
     if a.regression_as_classification:
         deal_probability = Dense(N_CLASSES, activation='softmax', name='deal_probability')(deal_probability_head)
     else:
         deal_probability = Dense(1, activation='sigmoid', name='deal_probability')(deal_probability_head)
 
-    deal_zero = Dense(1, activation='sigmoid', name='deal_zero')(deal_zero_head)
-
-    imgtop1   = Dense(N_IMGTOP1, activation='softmax', name='imgtop1')(imgtop1_head)
 
     inputs = [
         inp_reg,              inp_pcn,               inp_cn,               inp_ut, 
         inp_city,             inp_week,              inp_imgt1,            inp_p1, 
         inp_p2,               inp_p3,                inp_price,            inp_itemseq, 
         inp_desc,             inp_title,             inp_avg_days_up_user, inp_avg_times_up_user,  #inp_min_days_up_user, inp_min_times_up_user, inp_max_days_up_user, inp_max_times_up_user, 
-        inp_n_user_items,     inp_has_price,         inp_userid,           inp_geoid, 
-        inp_fw,               inp_fw2,               inp_price_range
+        inp_n_user_items,     inp_has_price,         inp_userid,           inp_geoid,#
+        #inp_fw,               inp_price_range,
     ]
     
     if a.use_images:
@@ -807,26 +809,48 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
     xd = np.zeros((a.batch_size, a.maxlen_desc  ), dtype=np.float32)
     xt = np.zeros((a.batch_size, a.maxlen_title ), dtype=np.float32)
 
-    #w_deal_probabilities = w_deal_zero = w_imgtop1 = np.ones((a.batch_size,), dtype=np.float32)
-    
+    w_deal_probabilities = w_deal_zero = np.ones((a.batch_size,), dtype=np.float32)
+    IDX_IMGTOP1 = 6
+
+    gY_bins_idx = {}
+    for b_i, b_idx in Y_bins_idx.items():
+        gY_bins_idx[b_i] = np.intersect1d(b_idx, idx, assume_unique=True)
+        print(gY_bins_idx[b_i].size)
+
+    min_bin, max_bin = min(gY_bins_idx.keys()), max(gY_bins_idx.keys())
+
+    print(min_bin, max_bin)
+
     batch = 0
     i = 0
     while True:
         
         if i == len(idx):
             i = 0
-            if not valid and (Y is not None):
+            if (not valid) and (Y is not None):
                 random.shuffle(idx)
+
             
         x[batch,:] = X[:fname_idx,idx[i]]
+
+        if (Y is not None) and (not valid):
+            
+            clip = lambda value, minval, maxval: sorted((minval, value, maxval))[1]
+
+            __i = np.random.choice(range(x.shape[1]), size=int(x.shape[1]*.2), replace=False) # distort % of features
+            for _i in __i:
+                similar_idx = None
+                while similar_idx is None:
+                    similar_bin = clip(Y_binned[idx[i]] + np.random.randint(-4,5), min_bin, max_bin)
+                    if gY_bins_idx[similar_bin].size > 0:
+                        similar_idx = np.random.choice(gY_bins_idx[similar_bin])
+                
+                similar_idx = np.random.choice(idx) # hack to pick from any other sample
+                x[batch,_i] = X[_i, similar_idx] # similar_idx for more conservative noise
+
         if Y is not None:
             y[batch,...] = Y[idx[i]]
-            if a.aug and not valid:
-                if np.random.rand() > 0.5:
-                    y[batch,...] *= np.random.uniform(0.9, 1.2)
-                    if y[batch,...]  > 1.0:
-                        y[batch,...] = 1.0
-
+                
         n_vect = X_desc_pad[idx[i]].shape[0]
         i_vect = a.maxlen_desc - n_vect
         xd[batch, i_vect:, ...] = X_desc_pad[idx[i]]
@@ -877,8 +901,8 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
                   xx[:, 4], xx[:, 5], xx[:, 6], xx[:, 7], 
                   xx[:, 8], xx[:, 9], xx[:,10], xx[:,11],
                   xxd,      xxt,      xx[:,12], xx[:,13],  #xx[:,14], xx[:,15], xx[:,16], xx[:,17], 
-                  xx[:,18], xx[:,19], xx[:,20], xx[:,21],
-                  xx[:,22], xx[:,23], xx[:,24]]
+                  xx[:,18], xx[:,19], xx[:,20], xx[:,21],]
+                  #xx[:,22], xx[:,23], ]
 
             if a.use_images:
                 xxi = np.copy(xi)
@@ -888,10 +912,24 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
             if a.use_image_features:
                 xxif = np.copy(xif)
                 _x.append(xxif)
+                #del xxif
+
+
+            if a.aug and np.random.rand > 0.75:
+                if not valid and (Y is not None):
+                    for j in range(23):
+                        _x[j] *= np.random.uniform(0.99,1.01)
+            #del xx
+            #del xxt
 
             if Y is not None:
                 assert not np.any(np.isnan(y))
-                yield(_x, [np.copy(y), (y==0)*1., to_categorical(_x[6], N_IMGTOP1)])#, [w_deal_probabilities, w_deal_zero, w_imgtop1])
+                w_imgtop1 = 1. - (_x[IDX_IMGTOP1] == NA_IMGTOP1) * 1.
+                _x[IDX_IMGTOP1][_x[IDX_IMGTOP1] == NA_IMGTOP1] = 0. # 
+                yield( _x, 
+                    [np.copy(y), (y==0)*1., to_categorical(_x[IDX_IMGTOP1], N_IMGTOP1)], 
+                    #[w_deal_probabilities, w_deal_zero, w_imgtop1]
+                    )
             else:
                 yield(_x)
             ##if i == a.batch_size * 4:
@@ -912,9 +950,6 @@ if gpus > 1 : model = multi_gpu_model(model, gpus=gpus)
 ### callbacks
 cmdline = '_'.join([aa.strip().replace('models/', '') for aa in sys.argv[1:]])
 print(cmdline)
-if a.model or a.train_on_test:
-    cmdline = ''
-
 checkpoint = ModelCheckpoint(
     '%s/best%s-epoch{epoch:03d}-val_rmse{val_deal_probability_rmse:.6f}.hdf5' % (MODELS_DIR, cmdline), 
     monitor='val_deal_probability_rmse', verbose=1, save_best_only=True)
@@ -942,10 +977,10 @@ if not (a.test or a.test_train):
         model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
                       loss = [rac_loss, binary_crossentropy] , metrics={ 'deal_probability' : rmse, 'deal_zero' : binary_accuracy})
     else:
-        model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True) if a.use_images else RMSprop(lr=a.learning_rate), 
+        model.compile(optimizer=Adam(lr=a.learning_rate, amsgrad=True),# if a.use_images else RMSprop(lr=a.learning_rate), 
                       loss = ['mse', binary_crossentropy, categorical_crossentropy] , 
                       metrics={ 'deal_probability' : rmse, 'deal_zero' : binary_accuracy, 'imgtop1' : categorical_accuracy},
-                      loss_weights = [1., 0.5, 0.1],)
+                      loss_weights = [1., 0.1, 0.05],)
 
     idx = list(range(X.shape[1]))
     random.shuffle(idx)
@@ -990,10 +1025,8 @@ if not (a.test or a.test_train):
         print('==============================================================================================')
     else:
 
-        if valid_idx is None:
-            valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
+        valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
         train_idx = list(df_y_train[np.invert(df_y_train.index.isin(valid_idx))].index)
-
 
         if a.balance:
             valid_idx_set = set(valid_idx)
@@ -1047,13 +1080,12 @@ if a.test or a.test_train:
     subm = pd.read_csv(csv)
     assert np.all(subm['item_id'] == df['item_id']) # order right?
     df['deal_probability_ref'] = subm['deal_probability']
-    subm['deal_probability'] = pred[0]
-    preffix = 'test' if imgs_dir == 'test_jpg' else 'train'
-    csv_filename = cmdline[max(0,len(cmdline)-255+5+len(preffix)):]
-    subm.to_csv('%s/%s-%s.csv' % (CSV_DIR, preffix, csv_filename), index=False)
+    subm['deal_probability'] = pred[0] #* (1. - (pred[1] > 0.9 ) * 1.)
+    csv_filename = a.test_preffix  + '-' + cmdline[max(0,len(cmdline)-255+5+len(a.test_preffix)):] + '.csv'
+    subm.to_csv('%s/%s' % (CSV_DIR, csv_filename), index=False)
 
     diff=(subm['deal_probability']-df['deal_probability_ref']).values
     _rmse = np.sqrt(np.mean(diff**2))
-    print("RMSE test-%s.csv vs reference %s is %f" % (cmdline, csv, _rmse))
+    print("RMSE %s vs reference %s is %f" % (csv_filename, csv, _rmse))
 
 
