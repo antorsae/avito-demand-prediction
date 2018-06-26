@@ -1,7 +1,7 @@
 from keras import backend as K
 from keras.engine.topology import Layer
 import numpy as np
-
+from keras.initializers import Constant
 
 class MeanLayer(Layer):
     def __init__(self, **kwargs):

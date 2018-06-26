@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from keras import backend as K
 from keras.models import Model, load_model
-from keras.layers import Input, concatenate
+from keras.layers import Input, concatenate, Lambda
 from keras.optimizers import RMSprop, Adam, SGD
 from keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 from geomean_layer import GeomeanLayer
@@ -62,7 +62,7 @@ df_x_train = pd.read_csv('train_oof_predictions_stack.csv')
 df_y_train = pd.read_feather('df_y_train')
 df_test = pd.read_csv('test_predictions_stack.csv')
 
-X = np.clip(df_x_train.values, 0, 1)
+X = np.clip(df_x_train.fillna(0.0).values, 0, 1)
 Y = df_y_train['deal_probability'].values
 X_test = np.clip(df_test.fillna(0.0).values, 0, 1)
 
@@ -74,18 +74,17 @@ def rmse(y_true, y_pred):
     #return K.sqrt(K.mean(K.square(K.clip(y_pred, 0.0, 1.0) - y_true), axis=-1))
     return tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(y_true, tf.clip_by_value(y_pred, 0.0, 1.0)))))
 
-def rmse_numpy(y_true, y_pred):
-    diff = np.array(y_true) - np.array(y_pred)
-    _rmse = np.sqrt(np.mean(diff**2))
-    return _rmse
-
 def get_model():
     input = Input(shape=(X.shape[1], ), name='input')
     x = input
     weighted_geomean = GeomeanLayer()(x)
-    weighted_mean = MeanLayer()(x)
-    result = MeanLayer()(concatenate([weighted_geomean, weighted_mean], axis=1))
-    model = Model(inputs=input, outputs=result)
+    #weighted_mean = MeanLayer()(x)
+    #square_geo = GeomeanLayer()(Lambda(lambda x: K.square(x))(x))
+    #square_mean = MeanLayer()(Lambda(lambda x: K.square(x))(x))
+    #root_geo = GeomeanLayer()(Lambda(lambda x: K.sqrt(x))(x))
+    #root_mean = MeanLayer()(Lambda(lambda x: K.sqrt(x))(x))
+    #result = MeanLayer()(concatenate([weighted_geomean, weighted_mean, square_geo, square_mean, root_geo, root_mean], axis=1))
+    model = Model(inputs=input, outputs=weighted_geomean)
     return model
 
 
@@ -165,13 +164,16 @@ if not a.test and not a.test_train:
             DebugCallback(gen(valid_idx, valid=False, X=X, Y=Y), 100))
 
     model.fit_generator(
-        #generator=gen(list(df_y_train.index), valid=False, X=X, Y=Y),
-        #steps_per_epoch=(len(list(df_y_train.index)) // a.batch_size),
-        generator=gen(train_idx, valid=False, X=X, Y=Y),
-        steps_per_epoch=(len(train_idx) // a.batch_size),
+        generator=gen(list(df_y_train.index), valid=False, X=X, Y=Y),
+        steps_per_epoch=(len(list(df_y_train.index)) // a.batch_size),
+        #generator=gen(train_idx, valid=False, X=X, Y=Y),
+        #steps_per_epoch=(len(train_idx) // a.batch_size),
 
-        validation_data=gen(valid_idx, valid=True, X=X, Y=Y),
-        validation_steps=len(valid_idx) // a.batch_size,
+        #validation_data=gen(valid_idx, valid=True, X=X, Y=Y),
+        #validation_steps=len(valid_idx) // a.batch_size,
+        validation_data=gen(list(df_y_train.index), valid=True, X=X, Y=Y), 
+        validation_steps=(len(list(df_y_train.index)) // a.batch_size),
+
         epochs=a.max_epoch,
         callbacks=callbacks,
         verbose=1)
