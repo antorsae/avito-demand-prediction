@@ -39,9 +39,11 @@ from keras import backend as K
 
 from keras.optimizers import RMSprop, Adam, SGD
 from keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
+from keras.callbacks import *
 
 from iterm import show_image
 import pickle
+
 
 from tensorflow.python.client import device_lib
 def get_available_gpus():
@@ -112,6 +114,7 @@ parser.add_argument('-qg', '--quantum_gravity', action='store_true', help='Quant
 parser.add_argument('-opt', '--opt', action='store_true', help='Experimental Optimizer')
 parser.add_argument('-aug', '--aug', action='store_true', help='Use augmentation')
 parser.add_argument('-fnr', '--feature-noise-rate', type=float, default=0., help='Rate (0..1) of features to be injected w/ noise, e.g. -fnr 0.2')
+parser.add_argument('-fnrd', '--feature-noise-rate-watchdog', action='store_true')
 parser.add_argument('-sn', '--smart-noise', action='store_true', help='Use smart noise (instead of pure swap noise)')
 parser.add_argument('-rac', '--regression-as-classification', action='store_true', help='Regression as classification problem')
 parser.add_argument('-uif', '--use-image-features', action='store_true')
@@ -125,6 +128,23 @@ parser.add_argument('-tp',  '--test-preffix',             default=None, help='Pr
 
 
 a = parser.parse_args()
+
+global feature_noise_rate
+feature_noise_rate = a.feature_noise_rate
+class WatchdogCallback(Callback):
+    def __init__(self, target_rmse=0.2150, n=10):
+        super(WatchdogCallback, self).__init__()
+        self.target_rmse = target_rmse
+        self.n = n
+
+    def on_batch_end(self, batch, logs=None):
+        global feature_noise_rate
+        if batch % self.n != 0:
+            return
+        if logs['deal_probability_rmse'] < self.target_rmse:
+            feature_noise_rate += 0.01
+            print('feature_noise_rate increased %f' % feature_noise_rate)
+
 
 if a.rnn_channels is None:
     a.rnn_channels = a.emb_text
@@ -843,17 +863,17 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
             
         x[batch,:] = X[:fname_idx,idx[i]]
 
-        if (noise and (a.feature_noise_rate > 0.)) or ((Y is not None) and (not valid) and (a.feature_noise_rate > 0.)):
+        if (noise and (feature_noise_rate > 0.)) or ((Y is not None) and (not valid) and (feature_noise_rate > 0.)):
             
             if a.smart_noise:
                 __i = np.random.choice( 
                     X_unrelated_feature_groups, 
-                    size=int(np.ceil(len(X_unrelated_feature_groups)*a.feature_noise_rate)), 
+                    size=int(np.ceil(len(X_unrelated_feature_groups)*feature_noise_rate)), 
                     replace=False) # distort % of features
             else:
                 __i = np.random.choice(
                     range(x.shape[1]), 
-                    size=int(np.ceil(x.shape[1]*a.feature_noise_rate)), 
+                    size=int(np.ceil(x.shape[1]*feature_noise_rate)), 
                     replace=False) # distort % of features
 
             for _i in __i:
@@ -1070,13 +1090,16 @@ if not (a.test or a.test_train):
                         for _ in range(5):
                             train_idx.append(j)
 
+        if a.k_folds < 0 and a.feature_noise_rate_watchdog:
+            callbacks = [WatchdogCallback()]
+
         history = model.fit_generator(
             generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y),
             steps_per_epoch  = len(train_idx) // a.batch_size, 
             validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y) if valid_idx else None, 
             validation_steps = (len(valid_idx) // a.batch_size) if valid_idx else None, 
-            epochs = a.max_epoch, 
-            callbacks=callbacks if a.k_folds >= 0 else None, 
+            epochs = a.max_epoch,
+            callbacks=callbacks,
             verbose=1)
 
 
