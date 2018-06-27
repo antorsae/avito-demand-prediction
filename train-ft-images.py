@@ -118,9 +118,10 @@ parser.add_argument('-uif', '--use-image-features', action='store_true')
 parser.add_argument('-bal', '--balance', action='store_true')
 parser.add_argument('-val', '--val', type=int, default=0, help="Do validation every Nth batch")
 
-parser.add_argument('-t',  '--test',         action='store_true', help='Test on test set')
-parser.add_argument('-tt', '--test-train',   action='store_true', help='Test on train set')
-parser.add_argument('-tp', '--test-preffix', default=None, help='Preffix for CSV vile')
+parser.add_argument('-t',   '--test',                     action='store_true', help='Test on test set')
+parser.add_argument('-tt',  '--test-train',               action='store_true', help='Test on train set')
+parser.add_argument('-tta', '--test-time-augmentation',   type=int, default=0, help='TTA times e.g. -tta 10')
+parser.add_argument('-tp',  '--test-preffix',             default=None, help='Preffix for CSV vile')
 
 
 a = parser.parse_args()
@@ -404,6 +405,7 @@ X_related_features = [ \
     [7, 8, 9], # p1,p2,p3
     [10, 19], # price, has_price
     ]
+
 X_unrelated_feature_groups = [0,1,3,5,6,7,10]
 
 X_test = np.array([
@@ -804,7 +806,7 @@ def pad_img_to_fit_bbox(img, x1, x2, y1, y2):
     return img, x1, x2, y1, y2
 
 
-def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=None,imgs_dir='train_jpg' ):
+def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=None,imgs_dir='train_jpg', noise=False, noise_from=None):
     
     if a.use_images:
         load_img_fast_jpg  = lambda img_path: jpeg.JPEG(img_path).decode()
@@ -826,11 +828,9 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
     gY_bins_idx = {}
     for b_i, b_idx in Y_bins_idx.items():
         gY_bins_idx[b_i] = np.intersect1d(b_idx, idx, assume_unique=True)
-        print(gY_bins_idx[b_i].size)
-
     min_bin, max_bin = min(gY_bins_idx.keys()), max(gY_bins_idx.keys())
-
-    print(min_bin, max_bin)
+    clip = lambda value, minval, maxval: sorted((minval, value, maxval))[1]
+    X_noise_from = noise_from if noise_from is not None else X
 
     batch = 0
     i = 0
@@ -840,14 +840,11 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
             i = 0
             if (not valid) and (Y is not None):
                 random.shuffle(idx)
-
             
         x[batch,:] = X[:fname_idx,idx[i]]
 
-        if (Y is not None) and (not valid) and (a.feature_noise_rate > 0.):
+        if (noise and (a.feature_noise_rate > 0.)) or ((Y is not None) and (not valid) and (a.feature_noise_rate > 0.)):
             
-            clip = lambda value, minval, maxval: sorted((minval, value, maxval))[1]
-
             if a.smart_noise:
                 __i = np.random.choice( 
                     X_unrelated_feature_groups, 
@@ -871,8 +868,12 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
                             for related_feature in related_features:
                                 x[batch,related_feature] = X[related_feature, similar_idx] 
                 else:
-                    similar_idx = np.random.choice(idx) # hack to pick from any other sample, this voids the previous 5 lines
-                x[batch,_i] = X[_i, similar_idx] 
+                    if noise_from is not None:
+                        similar_idx = np.random.randint(X_noise_from.shape[1])
+                    else:
+                        similar_idx = np.random.randint(len(idx))
+                        similar_idx = idx[similar_idx] # hack to pick from any other sample, this voids the previous 5 lines
+                x[batch,_i] = X_noise_from[_i, similar_idx] 
 
         if Y is not None:
             y[batch,...] = Y[idx[i]]
@@ -1051,8 +1052,12 @@ if not (a.test or a.test_train):
         print('==============================================================================================')
     else:
 
-        valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
-        train_idx = list(df_y_train[np.invert(df_y_train.index.isin(valid_idx))].index)
+        if a.k_folds == -1:
+            train_idx = idx
+            valid_idx = None
+        else:
+            valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
+            train_idx = list(df_y_train[np.invert(df_y_train.index.isin(valid_idx))].index)
 
         if a.balance:
             valid_idx_set = set(valid_idx)
@@ -1065,14 +1070,25 @@ if not (a.test or a.test_train):
                         for _ in range(5):
                             train_idx.append(j)
 
-        model.fit_generator(
+        history = model.fit_generator(
             generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y),
             steps_per_epoch  = len(train_idx) // a.batch_size, 
-            validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y), 
-            validation_steps = len(valid_idx) // a.batch_size, 
+            validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y) if valid_idx else None, 
+            validation_steps = (len(valid_idx) // a.batch_size) if valid_idx else None, 
             epochs = a.max_epoch, 
-            callbacks=callbacks, 
+            callbacks=callbacks if a.k_folds >= 0 else None, 
             verbose=1)
+
+
+        if a.k_folds == -1:
+            train_rmse = history.history['deal_probability_rmse'][-1]
+
+            model.save('{}/best{}-epoch{:03d}-train_rmse{:.6f}.hdf5'.format(
+                MODELS_DIR,
+                cmdline,
+                a.max_epoch,
+                train_rmse,
+                 ))
 
 # Batch size needs to be a factor of total set (to use generator easily)
 # BS ->  508438 => Factors =>    2 ×     7 ×  23 × 1579 for test
@@ -1080,14 +1096,14 @@ if not (a.test or a.test_train):
 
 if a.test:
     _b =  46 if a.use_images else 3158
-    XX, XX_desc_pad, XX_title_pad, csv , bs, df, imgs_dir = \
-        X_test, te_desc_pad, te_title_pad, 'sample_submission.csv', gpus*_b//2, df_test, 'test_jpg'
+    XX, XX_desc_pad, XX_title_pad, csv , df, imgs_dir = \
+        X_test, te_desc_pad, te_title_pad, 'sample_submission.csv', df_test, 'test_jpg'
     XX_f = f_test
 elif a.test_train:
-    _b = 104 if a.use_images else 4448
-    XX, XX_desc_pad, XX_title_pad, csv , bs, df, imgs_dir = \
-        X, tr_desc_pad, tr_title_pad, 'train_submission.csv', gpus*_b//2, df_x_train, 'train_jpg'
-    XX_f = f_test
+    _b = 64 if a.use_images else 4448
+    XX, XX_desc_pad, XX_title_pad, csv , df, imgs_dir = \
+        X, tr_desc_pad, tr_title_pad, 'train_submission.csv', df_x_train, 'train_jpg'
+    XX_f = f_train
 
 if a.test or a.test_train:
 
@@ -1095,18 +1111,36 @@ if a.test or a.test_train:
 
     n_test   = XX.shape[1]
     test_idx = list(range(n_test)) 
-    a.batch_size = bs 
-    assert (a.batch_size % gpus)   == 0
-    assert (n_test % a.batch_size) == 0
-    pred = model.predict_generator(
-        generator        = gen(test_idx, valid=False, X=XX, X_desc_pad=XX_desc_pad, X_title_pad=XX_title_pad, X_f=XX_f, Y=None, imgs_dir=imgs_dir),
-        steps            = n_test // a.batch_size ,
-        verbose=1)
+    #a.batch_size = bs 
+    #assert (a.batch_size % gpus)   == 0
+    #assert (n_test % a.batch_size) == 0
+    avg_preds = None
+    for _ in tqdm(range(a.test_time_augmentation + 1), total=a.test_time_augmentation + 1):
+        pred = model.predict_generator(
+            generator        = gen(
+                test_idx, 
+                valid=False, 
+                X=XX, 
+                X_desc_pad=XX_desc_pad, 
+                X_title_pad=XX_title_pad, 
+                X_f=XX_f, 
+                Y=None, 
+                imgs_dir=imgs_dir,
+                noise = bool(a.test_time_augmentation),
+                noise_from = X_test),
+            steps = int(np.ceil(n_test / a.batch_size)) ,
+            verbose = 1)
+        if avg_preds is None:
+            avg_preds  = pred[0][:n_test]
+        else:
+            avg_preds += pred[0][:n_test]
+
+    avg_preds /= a.test_time_augmentation+1
 
     subm = pd.read_csv(csv)
     assert np.all(subm['item_id'] == df['item_id']) # order right?
     df['deal_probability_ref'] = subm['deal_probability']
-    subm['deal_probability'] = pred[0] #* (1. - (pred[1] > 0.9 ) * 1.)
+    subm['deal_probability'] = avg_preds #* (1. - (pred[1] > 0.9 ) * 1.)
     csv_filename = a.test_preffix  + '-' + cmdline[max(0,len(cmdline)-255+5+len(a.test_preffix)):] + '.csv'
     subm.to_csv('%s/%s' % (CSV_DIR, csv_filename), index=False)
 
