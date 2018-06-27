@@ -806,7 +806,7 @@ def pad_img_to_fit_bbox(img, x1, x2, y1, y2):
     return img, x1, x2, y1, y2
 
 
-def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=None,imgs_dir='train_jpg', noise=False):
+def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=None,imgs_dir='train_jpg', noise=False, noise_from=None):
     
     if a.use_images:
         load_img_fast_jpg  = lambda img_path: jpeg.JPEG(img_path).decode()
@@ -830,6 +830,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
         gY_bins_idx[b_i] = np.intersect1d(b_idx, idx, assume_unique=True)
     min_bin, max_bin = min(gY_bins_idx.keys()), max(gY_bins_idx.keys())
     clip = lambda value, minval, maxval: sorted((minval, value, maxval))[1]
+    X_noise_from = noise_from or X
 
     batch = 0
     i = 0
@@ -867,9 +868,12 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
                             for related_feature in related_features:
                                 x[batch,related_feature] = X[related_feature, similar_idx] 
                 else:
-                    similar_idx = np.random.randint(len(idx))
-                    similar_idx = idx[similar_idx] # hack to pick from any other sample, this voids the previous 5 lines
-                x[batch,_i] = X[_i, similar_idx] 
+                    if noise_from:
+                        similar_idx = np.random.randint(X_noise_from.shape[1])
+                    else:
+                        similar_idx = np.random.randint(len(idx))
+                        similar_idx = idx[similar_idx] # hack to pick from any other sample, this voids the previous 5 lines
+                x[batch,_i] = X_noise_from[_i, similar_idx] 
 
         if Y is not None:
             y[batch,...] = Y[idx[i]]
@@ -1048,8 +1052,12 @@ if not (a.test or a.test_train):
         print('==============================================================================================')
     else:
 
-        valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
-        train_idx = list(df_y_train[np.invert(df_y_train.index.isin(valid_idx))].index)
+        if a.k_folds == -1:
+            train_idx = idx
+            valid_idx = None
+        else:
+            valid_idx = list(df_y_train.sample(frac=0.2, random_state=1991).index)
+            train_idx = list(df_y_train[np.invert(df_y_train.index.isin(valid_idx))].index)
 
         if a.balance:
             valid_idx_set = set(valid_idx)
@@ -1062,14 +1070,25 @@ if not (a.test or a.test_train):
                         for _ in range(5):
                             train_idx.append(j)
 
-        model.fit_generator(
+        history = model.fit_generator(
             generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y),
             steps_per_epoch  = len(train_idx) // a.batch_size, 
-            validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y), 
-            validation_steps = len(valid_idx) // a.batch_size, 
+            validation_data  = gen(valid_idx, valid=True,  X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y) if valid_idx else None, 
+            validation_steps = (len(valid_idx) // a.batch_size) if valid_idx else None, 
             epochs = a.max_epoch, 
-            callbacks=callbacks, 
+            callbacks=callbacks if a.k_folds >= 0 else None, 
             verbose=1)
+
+
+        if a.k_folds == -1:
+            train_rmse = history.history['deal_probability_rmse'][-1]
+
+            model.save('{}/best{}-epoch{:03d}-train_rmse{:.6f}.hdf5'.format(
+                MODELS_DIR,
+                cmdline,
+                a.max_epoch,
+                train_rmse,
+                 ))
 
 # Batch size needs to be a factor of total set (to use generator easily)
 # BS ->  508438 => Factors =>    2 ×     7 ×  23 × 1579 for test
@@ -1107,7 +1126,8 @@ if a.test or a.test_train:
                 X_f=XX_f, 
                 Y=None, 
                 imgs_dir=imgs_dir,
-                noise = bool(a.test_time_augmentation)),
+                noise = bool(a.test_time_augmentation),
+                noise_from = X_test),
             steps = int(np.ceil(n_test / a.batch_size)) ,
             verbose = 1)
         if avg_preds is None:
