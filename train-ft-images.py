@@ -136,12 +136,17 @@ class WatchdogCallback(Callback):
         super(WatchdogCallback, self).__init__()
         self.target_rmse = target_rmse
         self.n = n
+        self.running_rmse = 0.0
+
+    def on_epoch_begin(self, batch, logs=None):
+        self.running_rmse = 0.0
 
     def on_batch_end(self, batch, logs=None):
         global feature_noise_rate
+        self.running_rmse += logs['deal_probability_rmse']
         if batch % self.n != 0:
             return
-        if logs['deal_probability_rmse'] < self.target_rmse:
+        if self.running_rmse / (batch + 1) < self.target_rmse:
             feature_noise_rate += 0.01
             print('feature_noise_rate increased %f' % feature_noise_rate)
 
