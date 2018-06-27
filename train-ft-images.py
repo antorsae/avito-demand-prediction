@@ -401,7 +401,6 @@ X_related_features = [ \
     [0, 4, 21], # reg, city, geoid
     [1, 2 ],    # pcn, cn
     [3, 11, 12,13,14,15,16,17,18,20], #ut, itemseq, avg_days_up_user, avg_times_up_user, min_days_up_user, min_times_up_user, max_days_up_user, max_times_up_user, n_user_items,userid
-    [6, 22], #imgt1, image
     [7, 8, 9], # p1,p2,p3
     [10, 19], # price, has_price
     ]
