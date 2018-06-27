@@ -1092,6 +1092,8 @@ if not (a.test or a.test_train):
 
         if a.k_folds < 0 and a.feature_noise_rate_watchdog:
             callbacks = [WatchdogCallback()]
+        else:
+            callbacks = None
 
         history = model.fit_generator(
             generator        = gen(train_idx, valid=False, X=X, X_desc_pad=tr_desc_pad, X_title_pad=tr_title_pad, X_f=f_train, Y=Y),
