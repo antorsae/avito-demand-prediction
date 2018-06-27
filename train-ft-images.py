@@ -830,7 +830,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
         gY_bins_idx[b_i] = np.intersect1d(b_idx, idx, assume_unique=True)
     min_bin, max_bin = min(gY_bins_idx.keys()), max(gY_bins_idx.keys())
     clip = lambda value, minval, maxval: sorted((minval, value, maxval))[1]
-    X_noise_from = noise_from or X
+    X_noise_from = noise_from if noise_from is not None else X
 
     batch = 0
     i = 0
@@ -868,7 +868,7 @@ def gen(idx, valid=False, X=None,X_desc_pad=None, X_title_pad=None, X_f=None, Y=
                             for related_feature in related_features:
                                 x[batch,related_feature] = X[related_feature, similar_idx] 
                 else:
-                    if noise_from:
+                    if noise_from is not None:
                         similar_idx = np.random.randint(X_noise_from.shape[1])
                     else:
                         similar_idx = np.random.randint(len(idx))
